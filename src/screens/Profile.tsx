@@ -1,12 +1,16 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate } from 'react-router-dom';
 import { ChevronRight, Flag, Lock, PenLine, RotateCcw, ShieldOff, SlidersHorizontal, UserRound, Wrench, Check } from 'lucide-react';
 import { ConfirmModal } from '../components/Dialog';
 import { Page, toast } from '../components/Shell';
 import { Avatar, Button, EmptyState, Ico, Notice } from '../components/ui';
 import { ACCOUNTS } from '../domain/seed';
 import { accountName } from '../domain/rules';
-import { actions } from '../store/store';
+import { actions, setMode, useMode } from '../store/store';
+import { useAuth } from '../auth/AuthProvider';
+import { isSupabaseConfigured } from '../auth/config';
+import { LogOut, FlaskConical, LogIn } from 'lucide-react';
+import { TextField } from '../components/ui';
 import { PrefsPicker } from './Onboarding';
 import { Link } from 'react-router-dom';
 import { useMe } from './common';
@@ -21,35 +25,60 @@ function Row({ to, icon, title, sub }: { to: string; icon: typeof Lock; title: s
 
 export function Profile() {
   const { db, id, role, name } = useMe();
-  const photo = role === 'writer' ? db.writers[id]?.photo : undefined;
+  const mode = useMode();
+  const auth = useAuth();
+  const navigate = useNavigate();
+  const [confirm, setConfirm] = useState(false);
+  const photo = role === 'writer' && mode === 'demo' ? db.writers[id]?.photo : undefined;
+  const account = mode === 'account' && isSupabaseConfigured;
   return (
     <Page nav noBack title="Profile">
       <div className="stack">
         <div className="card row" style={{ gap: 14 }}>
           <Avatar name={name} photo={photo} />
-          <div><h2 className="t-h2">{name}</h2><p className="t-meta" style={{ textTransform: 'capitalize' }}>{role} account · demo</p></div>
+          <div style={{ minWidth: 0 }}>
+            <h2 className="t-h2">{name}</h2>
+            {account ? <p className="t-meta" style={{ overflowWrap: 'anywhere' }}>{db.realUser?.email}</p> : <p className="t-meta" style={{ textTransform: 'capitalize' }}>{role} · demo account</p>}
+          </div>
         </div>
+        {account && <Notice icon={Check} tone="ok">Signed in. Your bookmarks and reading progress sync to your account.</Notice>}
+        {!account && <Notice icon={FlaskConical} tone="warn"><b>Demo mode.</b> Sample data stored only on this device. {isSupabaseConfigured ? 'It is not connected to a real account.' : 'Accounts aren’t configured in this build.'}</Notice>}
         <div className="stack-sm">
-          {role === 'reader' && <Row to="/profile/preferences" icon={SlidersHorizontal} title="Reading preferences" sub="Genres and languages" />}
-          {role === 'writer' && <Row to="/profile/writer" icon={PenLine} title="Writer profile" sub="Name, bio and photo" />}
-          {role === 'filmmaker' && <Row to="/profile/introduction" icon={UserRound} title="Professional introduction" sub="Reused on every enquiry" />}
-          <Row to="/profile/privacy" icon={Lock} title="Privacy & blocked contacts" sub="Unblock people, see local reports" />
-          <Row to="/profile/demo" icon={Wrench} title="Demo controls" sub="Switch account · reset data" />
+          {role === 'reader' && <Row to="/profile/preferences" icon={SlidersHorizontal} title="Reading preferences" sub={account ? 'Name, genres and languages' : 'Genres and languages'} />}
+          {role === 'writer' && <Row to="/profile/writer" icon={PenLine} title="Writer profile" sub="Demo · name, bio and photo" />}
+          {role === 'filmmaker' && <Row to="/profile/introduction" icon={UserRound} title="Professional introduction" sub="Demo · reused on every enquiry" />}
+          {!account && <Row to="/profile/privacy" icon={Lock} title="Privacy & blocked contacts" sub="Demo · unblock people, see local reports" />}
+          {!account && <Row to="/profile/demo" icon={Wrench} title="Demo controls" sub="Switch demo account · reset demo data" />}
+          {account && (
+            <button className="list-row" onClick={() => { setMode('demo'); navigate('/', { replace: true }); }}>
+              <Ico i={FlaskConical} /><span className="grow"><span className="t-h3" style={{ display: 'block' }}>Writer & filmmaker demo</span><span className="t-meta">Demo only · enquiries aren’t connected to your account yet</span></span><Ico i={ChevronRight} size={20} />
+            </button>
+          )}
+          {!account && isSupabaseConfigured && (
+            <button className="list-row" onClick={() => { setMode('account'); navigate('/', { replace: true }); }}>
+              <Ico i={LogIn} /><span className="grow"><span className="t-h3" style={{ display: 'block' }}>Log in or create an account</span><span className="t-meta">Leave demo mode</span></span><Ico i={ChevronRight} size={20} />
+            </button>
+          )}
         </div>
-        <p className="t-help">Prototype only: sign-in, moderation, message delivery and rights checks are simulated locally.</p>
+        {account && <Button variant="secondary" icon={LogOut} onClick={() => setConfirm(true)}>Log out</Button>}
+        <p className="t-help">{account ? 'Writer accounts, story ownership and adaptation enquiries are still demo-only.' : 'Prototype: moderation, message delivery and rights checks are simulated locally.'}</p>
       </div>
+      <ConfirmModal open={confirm} title="Log out?" confirmLabel="Log out" onCancel={() => setConfirm(false)} body="Your bookmarks and reading progress stay safe in your account. This device will forget them until you log in again." onConfirm={() => { setConfirm(false); void auth.signOut().then(() => navigate('/auth', { replace: true })); }} />
     </Page>
   );
 }
 
 export function Preferences() {
-  const { db, id } = useMe();
+  const { db, id, name } = useMe();
+  const mode = useMode();
+  const [display, setDisplay] = useState(name);
   const p = db.prefs[id];
   const [genres, setGenres] = useState(p.genres);
   const [languages, setLanguages] = useState(p.languages);
-  const ok = genres.length > 0 && languages.length > 0;
+  const ok = genres.length > 0 && languages.length > 0 && (mode !== 'account' || display.trim().length >= 2);
   return (
-    <Page title="Reading preferences" fallback="/profile" footer={<Button disabled={!ok} onClick={() => { actions.savePrefs(id, { genres, languages }); toast('Preferences saved'); }}>Save preferences</Button>}>
+    <Page title="Reading preferences" fallback="/profile" footer={<Button disabled={!ok} onClick={() => { actions.savePrefs(id, { genres, languages }); if (mode === 'account' && display.trim().length >= 2) actions.saveDisplayName(id, display.trim()); toast('Preferences saved'); }}>Save preferences</Button>}>
+      {mode === 'account' && <div style={{ marginBottom: 20 }}><TextField label="Display name" value={display} onChange={setDisplay} maxLength={80} error={display.trim().length < 2 ? 'Enter your name.' : ''} /></div>}
       <PrefsPicker genres={genres} languages={languages} setGenres={setGenres} setLanguages={setLanguages} />
       {!ok && <p className="t-error" style={{ marginTop: 12 }}>Choose at least one genre and one language.</p>}
     </Page>
@@ -87,9 +116,11 @@ export function Privacy() {
 
 export function Demo() {
   const { id } = useMe();
+  const mode = useMode();
   const navigate = useNavigate();
   const [confirm, setConfirm] = useState(false);
   const active = ACCOUNTS.find((a) => a.id === id);
+  if (mode !== 'demo') return <Navigate to="/profile" replace />;
   return (
     <Page title="Demo controls" fallback="/profile">
       <div className="stack">

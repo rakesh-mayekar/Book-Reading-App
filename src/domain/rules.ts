@@ -19,11 +19,14 @@ const fail = (error: ErrorCode, message: string, existingId?: string): { ok: fal
 
 export const WORDS_PER_MINUTE = 190;
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function roleOf(accountId: string): Role | null {
-  return ACCOUNTS.find((a) => a.id === accountId)?.role ?? null;
+  // Real Supabase accounts are readers until writer accounts and story ownership are connected.
+  return ACCOUNTS.find((a) => a.id === accountId)?.role ?? (UUID.test(accountId) ? 'reader' : null);
 }
 
 export function accountName(db: DB, accountId: string): string {
+  if (db.realUser && db.realUser.id === accountId) return db.realUser.name || db.realUser.email.split('@')[0];
   const acc = ACCOUNTS.find((a) => a.id === accountId);
   if (!acc) return db.writers[accountId]?.name ?? 'Unknown';
   if (acc.role === 'filmmaker') return db.filmmakers[acc.id]?.name || acc.name;

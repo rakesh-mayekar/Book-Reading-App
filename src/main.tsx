@@ -9,11 +9,14 @@ import '@fontsource/exo/600.css';
 import '@fontsource/exo/700.css';
 import './styles.css';
 import App from './App';
+import { AuthProvider } from './auth/AuthProvider';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
-      <App />
+      <AuthProvider>
+        <App />
+      </AuthProvider>
     </BrowserRouter>
   </StrictMode>,
 );

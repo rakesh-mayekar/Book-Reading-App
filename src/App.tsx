@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { Capacitor, SystemBars, SystemBarsStyle, SystemBarType } from '@capacitor/core';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { MobileShell } from './components/Shell';
 import { Onboarding } from './screens/Onboarding';
@@ -11,23 +13,62 @@ import { ChapterEditor, Chapters, Preview, Publish, StorySetup, WriterDashboard,
 import { EnquiryForm, EnquiryReview, Introduction } from './screens/Filmmaker';
 import { Conversation, EnquiryDetail, EnquiryList } from './screens/Enquiries';
 import { Home, NotFoundState, RoleOnly, useMe } from './screens/common';
+import { AuthCallback, AuthScreen, ForgotPassword, ResetPassword, Splash } from './screens/Auth';
+import { useAuth } from './auth/AuthProvider';
+import { isSupabaseConfigured } from './auth/config';
+import { onSyncError, useMode } from './store/store';
+import { Button } from './components/ui';
+import { toast } from './components/Shell';
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { db, id, role } = useMe();
   const { pathname } = useLocation();
+  const auth = useAuth();
+  const mode = useMode();
+  const authPath = pathname.startsWith('/auth');
+  if (isSupabaseConfigured && mode === 'account') {
+    if (auth.status === 'loading' && !authPath) return <Splash />;
+    if (auth.status === 'error')
+      return (
+        <Splash>
+          <p className="t-error" style={{ color: '#fff' }}>{auth.error}</p>
+          <Button onClick={auth.retry}>Try again</Button>
+          <Button variant="secondary" onClick={() => void auth.signOut()}>Log out</Button>
+        </Splash>
+      );
+    if (auth.status === 'signedOut' && !authPath) return <Navigate to="/auth" replace />;
+  }
   if (role === 'reader' && !db.prefs[id]?.onboarded && pathname !== '/welcome' && pathname !== '/profile/demo') return <Navigate to="/welcome" replace />;
   return <>{children}</>;
 }
 
 const W = ({ children }: { children: React.ReactNode }) => <RoleOnly roles={['writer']}>{children}</RoleOnly>;
 
+/** Android: light status/gesture-bar icons over dark headers, dark icons elsewhere. */
+function useSystemBarStyle() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const darkTop = pathname === '/welcome' || pathname === '/discover' || /^\/story\/[^/]+$/.test(pathname);
+    void SystemBars.setStyle({ style: darkTop ? SystemBarsStyle.Dark : SystemBarsStyle.Light, bar: SystemBarType.StatusBar }).catch(() => {});
+    void SystemBars.setStyle({ style: pathname === '/welcome' ? SystemBarsStyle.Dark : SystemBarsStyle.Light, bar: SystemBarType.NavigationBar }).catch(() => {});
+  }, [pathname]);
+}
+
 export default function App() {
   const { id } = useMe();
+  useSystemBarStyle();
+  useEffect(() => onSyncError(toast), []);
   return (
     <MobileShell>
       <Gate>
         <Routes key={id}>
           <Route path="/" element={<Home />} />
+          <Route path="/auth" element={<AuthScreen />} />
+          <Route path="/auth/forgot" element={<ForgotPassword />} />
+          <Route path="/auth/reset" element={<ResetPassword />} />
+          <Route path="/auth/callback" element={<AuthCallback kind="callback" />} />
+          <Route path="/auth/recovery" element={<AuthCallback kind="recovery" />} />
           <Route path="/welcome" element={<Onboarding />} />
           <Route path="/discover" element={<Discover />} />
           <Route path="/story/:id" element={<StoryDetails />} />

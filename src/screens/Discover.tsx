@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { SearchX, Search, SlidersHorizontal } from 'lucide-react';
 import { BottomSheet } from '../components/Dialog';
 import { Page } from '../components/Shell';
@@ -14,6 +14,8 @@ const EMPTY: Filters = { genres: [], languages: [], status: '', query: '' };
 export function Discover() {
   const { db, id, role, name } = useMe();
   const [sheet, setSheet] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const blurTimer = useRef<number>();
   const mode = role === 'filmmaker' ? 'adapt' : 'read';
   const key = `${id}:discover`;
   const f = db.filters[key] ?? EMPTY;
@@ -36,7 +38,7 @@ export function Discover() {
   const toggle = (arr: string[], v: string) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
 
   const header = (
-    <header className="hero-head">
+    <header className={`hero-head ${focused ? 'compact' : ''}`}>
       {hero && <div className="bgart" aria-hidden="true"><Cover coverId={hero.coverId} style={{ width: '100%', height: '100%', borderRadius: 0 }} /></div>}
       <div className="eyebrow">{mode === 'adapt' ? 'Adaptation discovery' : `Welcome, ${name.split(' ')[0]}`}</div>
       <h1>{mode === 'adapt' ? 'Find a story worth adapting' : 'Find your next story'}</h1>
@@ -44,7 +46,7 @@ export function Discover() {
         <div className="searchbox">
           <Ico i={Search} size={20} />
           <label className="sr-only" htmlFor="disc-search">Search stories</label>
-          <input id="disc-search" type="search" className="input" placeholder="Search title, writer or genre" value={f.query} onChange={(e) => set({ query: e.target.value })} />
+          <input id="disc-search" type="search" className="input" placeholder="Search title, writer or genre" value={f.query} onChange={(e) => set({ query: e.target.value })} onFocus={() => { window.clearTimeout(blurTimer.current); setFocused(true); }} onBlur={() => { blurTimer.current = window.setTimeout(() => setFocused(false), 300); }} enterKeyHint="search" />
         </div>
         <div style={{ position: 'relative' }}>
           <IconButton className="light" icon={SlidersHorizontal} label={filterCount ? `Filters, ${filterCount} active` : 'Filters'} onClick={() => setSheet(true)} />

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefO
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, BookOpen, Bookmark, Compass, Inbox, LayoutGrid, User } from 'lucide-react';
 import { IconButton, Ico } from './ui';
-import { useDB } from '../store/store';
+import { useDB, useMode } from '../store/store';
 import { roleOf } from '../domain/rules';
 
 /* Toast */
@@ -34,8 +34,24 @@ export function MobileShell({ children }: { children: ReactNode }) {
 
 const scrollMemory = new Map<string, number>();
 
+function useTextEditing() {
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    const isText = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && !['checkbox', 'radio', 'file', 'button'].includes((t as HTMLInputElement).type)));
+    let t: number | undefined;
+    // Delay un-hiding so a tap that blurs the field is not lost to a layout shift.
+    const on = (e: FocusEvent) => { window.clearTimeout(t); setEditing(isText(e.target)); };
+    const off = () => { window.clearTimeout(t); t = window.setTimeout(() => setEditing(false), 300); };
+    document.addEventListener('focusin', on);
+    document.addEventListener('focusout', off);
+    return () => { document.removeEventListener('focusin', on); document.removeEventListener('focusout', off); };
+  }, []);
+  return editing;
+}
+
 export function BottomNav() {
   const db = useDB();
+  const editing = useTextEditing();
   const role = roleOf(db.activeAccountId);
   const pending = db.enquiries.filter((e) => e.writerId === db.activeAccountId && e.status === 'pending').length;
   const items =
@@ -45,7 +61,7 @@ export function BottomNav() {
         ? [{ to: '/discover', label: 'Discover', icon: Compass }, { to: '/library', label: 'Saved', icon: Bookmark }, { to: '/enquiries', label: 'Enquiries', icon: Inbox }, { to: '/profile', label: 'Profile', icon: User }]
         : [{ to: '/discover', label: 'Discover', icon: Compass }, { to: '/library', label: 'Library', icon: BookOpen }, { to: '/profile', label: 'Profile', icon: User }];
   return (
-    <nav className="bottom-nav" aria-label="Main">
+    <nav className={`bottom-nav ${editing ? 'hidden' : ''}`} aria-label="Main">
       {items.map((it) => (
         <NavLink key={it.to} to={it.to} replace>
           <Ico i={it.icon} />
@@ -72,6 +88,8 @@ export function Page({ title, fallback = '/', right, children, footer, nav, flus
 }) {
   const goBack = useBack(fallback);
   const loc = useLocation();
+  const mode = useMode();
+  const demoArea = mode === 'demo' && /^\/(writer|enquiries|profile\/(introduction|writer|demo|privacy))|\/enquire/.test(loc.pathname);
   const inner = useRef<HTMLElement>(null);
   const ref = scrollRef ?? inner;
   useLayoutEffect(() => {
@@ -85,6 +103,7 @@ export function Page({ title, fallback = '/', right, children, footer, nav, flus
           {!noBack && <IconButton icon={ArrowLeft} label="Back" onClick={onBack ?? goBack} />}
           {title && <h1>{title}</h1>}
           {!title && <div style={{ flex: 1 }} />}
+          {demoArea && <span className="demo-pill" title="Sample data stored on this device only">Demo</span>}
           {right}
         </header>
       )}

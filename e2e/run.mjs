@@ -28,10 +28,16 @@ const fillL = (label, v) => page.getByLabel(label, { exact: false }).first().fil
 // ---------- Layout sanity ----------
 console.log('Layout');
 await go('/');
-check('canvas is 390px wide', (await page.locator('#app-canvas').boundingBox()).width === 390);
+for (const w of [360, 390, 412]) {
+  await page.setViewportSize({ width: w, height: 800 });
+  const bb = await page.locator('#app-canvas').boundingBox();
+  check(`canvas uses full ${w}px width`, Math.abs(bb.width - w) < 1 && bb.x === 0, JSON.stringify(bb));
+  const sw = await page.evaluate(() => document.documentElement.scrollWidth);
+  check(`no horizontal overflow at ${w}px`, sw <= w);
+}
 await page.setViewportSize({ width: 1280, height: 900 });
 const wb = await page.locator('#app-canvas').boundingBox();
-check('wide window keeps 390px canvas, centred', wb.width === 390 && Math.abs(wb.x - (1280 - 390) / 2) < 2, JSON.stringify(wb));
+check('desktop preview is capped and centred', wb.width <= 480 && Math.abs(wb.x - (1280 - wb.width) / 2) < 2, JSON.stringify(wb));
 await page.setViewportSize({ width: 390, height: 844 });
 
 // ---------- A. Reader ----------

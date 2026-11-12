@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { BookOpen, Clapperboard, PenLine, Sparkles } from 'lucide-react';
 import { Button, Chip, Ico } from '../components/ui';
 import { GENRES, LANGUAGES } from '../domain/types';
-import { actions } from '../store/store';
+import { actions, useMode } from '../store/store';
 import { useMe } from './common';
 
 export function PrefsPicker({ genres, languages, setGenres, setLanguages, dark }: { genres: string[]; languages: string[]; setGenres: (g: string[]) => void; setLanguages: (l: string[]) => void; dark?: boolean }) {
@@ -30,6 +30,7 @@ const INTRO = [
 
 export function Onboarding() {
   const { id, name } = useMe();
+  const mode = useMode();
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [genres, setGenres] = useState<string[]>([]);
@@ -45,7 +46,7 @@ export function Onboarding() {
               <div style={{ width: 72, height: 72, borderRadius: '50%', border: '1.5px solid rgba(255,255,255,.5)', display: 'grid', placeItems: 'center' }}><Ico i={Sparkles} size={32} /></div>
               <h1 style={{ font: '600 44px/1.1 var(--font-serif)' }}>Stories</h1>
               <p style={{ font: '400 20px/1.5 var(--font-serif)', opacity: .9 }}>Read freely. Write boldly. Let a good story find its way to the screen.</p>
-              <p className="t-meta">Hello {name.split(' ')[0]} — this is a local prototype for testing flows.</p>
+              <p className="t-meta">Hello {name.split(' ')[0]}{mode === 'demo' ? ' — this is demo mode with sample data on this device.' : '.'}</p>
             </>
           )}
           {step > 0 && step < last && (
@@ -71,7 +72,7 @@ export function Onboarding() {
             <Button onClick={() => setStep(step + 1)}>{step === 0 ? 'Get started' : 'Continue'}</Button>
             <div className="row between">
               {step > 0 ? <button className="btn-link" onClick={() => setStep(last)}>Skip intro</button> : <span />}
-              <Link className="btn-link t-meta" to="/profile/demo">Demo controls</Link>
+              {mode === 'demo' ? <Link className="btn-link t-meta" to="/profile/demo">Demo controls</Link> : <span />}
             </div>
           </>
         ) : (

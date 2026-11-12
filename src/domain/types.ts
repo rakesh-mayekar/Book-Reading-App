@@ -148,6 +148,8 @@ export interface Filters {
 
 export interface DB {
   version: number;
+  /** Present only for a real (Supabase) account session. Never persisted locally. */
+  realUser?: { id: string; name: string; email: string };
   activeAccountId: string;
   writers: Record<string, WriterProfile>;
   filmmakers: Record<string, FilmmakerProfile>;

@@ -3,13 +3,14 @@ import { ArrowLeft, Bookmark, BookmarkCheck, ChevronRight, Clock, Film, Globe, I
 import { Page, useBack } from '../components/Shell';
 import { Badge, Button, Cover, Ico, IconButton, LinkButton, Notice } from '../components/ui';
 import { enquiryGate, publicStory, readingMinutes } from '../domain/rules';
-import { actions } from '../store/store';
+import { actions, useMode } from '../store/store';
 import { NotFoundState, useMe } from './common';
 
 export function StoryDetails() {
   const { id: storyId } = useParams();
   const { db, id, role } = useMe();
   const back = useBack('/discover');
+  const mode = useMode();
   const raw = db.stories.find((s) => s.id === storyId);
   const story = raw && publicStory(raw);
   if (!raw || !story) return <NotFoundState what="story" to="/discover" />;
@@ -67,7 +68,7 @@ export function StoryDetails() {
               <Notice icon={Info}>The writer is not taking adaptation enquiries for this story right now. You can still read it for free.</Notice>
             )
           )}
-          {role !== 'filmmaker' && <p className="t-help">Only filmmaker accounts can send adaptation enquiries.</p>}
+          {role !== 'filmmaker' && <p className="t-help">{mode === 'account' ? 'Adaptation enquiries are demo-only for now. They will open once writer accounts and story ownership are connected.' : 'Only filmmaker accounts can send adaptation enquiries.'}</p>}
         </section>
 
         <section aria-labelledby="chap-h">

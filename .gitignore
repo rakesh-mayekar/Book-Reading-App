@@ -5,3 +5,7 @@ dist
 .taste-skill
 skills-lock.json
 *.log
+
+.env
+.env.local
+.env.*.local
