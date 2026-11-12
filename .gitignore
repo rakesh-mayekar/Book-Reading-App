@@ -1,0 +1,7 @@
+node_modules
+dist
+.agents
+.claude
+.taste-skill
+skills-lock.json
+*.log
