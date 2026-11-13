@@ -1,0 +1,6 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Selection indicator">
+<circle id="Ellipse" cx="8" cy="8" r="7" fill="#F3EFE0"/>
+<path id="Check / Selected" d="M4 8L7 11L12 5" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" stroke="#191D18"/>
+</g>
+</svg>

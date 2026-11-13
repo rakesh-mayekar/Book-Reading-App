@@ -2,6 +2,7 @@ import { useId, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } 
 import { Link } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
 import type { EnquiryStatus } from '../domain/types';
+import { painted, ui as figmaUi } from '../assets/figma';
 
 export const Ico = ({ i: Icon, size = 22 }: { i: LucideIcon; size?: number }) => <Icon size={size} strokeWidth={1.75} aria-hidden="true" focusable="false" />;
 
@@ -16,6 +17,13 @@ const PALETTE: Record<string, [string, string]> = {
 };
 export function Cover({ coverId, style, className = '' }: { coverId: string; style?: CSSProperties; className?: string }) {
   const gid = useId().replace(/:/g, '');
+  if (painted[coverId]) {
+    return (
+      <div className={`cover ${className}`} style={style} role="img" aria-label="Story cover artwork">
+        <img src={painted[coverId]} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+      </div>
+    );
+  }
   const [a, b] = PALETTE[coverId] ?? PALETTE.ink;
   let art: ReactNode = null;
   switch (coverId) {
@@ -54,21 +62,24 @@ interface BtnProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   block?: boolean;
   loading?: boolean;
   icon?: LucideIcon;
+  arrow?: boolean;
 }
 const VARIANT = { primary: 'btn-primary', secondary: 'btn-secondary', danger: 'btn-danger', dangerSolid: 'btn-danger-solid' } as const;
-export function Button({ variant = 'primary', block = true, loading, icon, children, className = '', disabled, ...rest }: BtnProps) {
+export function Button({ variant = 'primary', block = true, loading, icon, arrow, children, className = '', disabled, ...rest }: BtnProps) {
   return (
     <button type="button" {...rest} disabled={disabled || loading} aria-busy={loading || undefined} className={`btn ${VARIANT[variant]} ${block ? 'block' : ''} ${loading ? 'loading' : ''} ${className}`}>
       {loading ? <span className="spinner" aria-hidden="true" /> : icon ? <Ico i={icon} size={20} /> : null}
       {children}
+      {arrow && !loading && <img src={variant === 'primary' || variant === 'dangerSolid' ? figmaUi.arrowLight : figmaUi.arrowDark} width={18} height={18} alt="" />}
     </button>
   );
 }
-export function LinkButton({ to, variant = 'primary', icon, children, state, replace, block = true }: { block?: boolean; to: string; variant?: 'primary' | 'secondary'; icon?: LucideIcon; children: ReactNode; state?: unknown; replace?: boolean }) {
+export function LinkButton({ to, variant = 'primary', icon, children, state, replace, block = true, arrow }: { block?: boolean; arrow?: boolean; to: string; variant?: 'primary' | 'secondary'; icon?: LucideIcon; children: ReactNode; state?: unknown; replace?: boolean }) {
   return (
     <Link to={to} state={state} replace={replace} className={`btn ${VARIANT[variant]} ${block ? 'block' : ''}`}>
       {icon && <Ico i={icon} size={20} />}
       {children}
+      {arrow && <img src={variant === 'primary' ? figmaUi.arrowLight : figmaUi.arrowDark} width={18} height={18} alt="" />}
     </Link>
   );
 }

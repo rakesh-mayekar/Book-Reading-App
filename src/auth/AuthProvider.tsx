@@ -1,14 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import type { Session, User } from '@supabase/supabase-js';
-import { buildAccountDb, fetchAccountData } from './cloud';
-import { isSupabaseConfigured, parseAuthLink, redirectUrl, supabase } from './config';
+import { buildAccountDb, fetchAccountData, updateProfile } from './cloud';
+import { isSupabaseConfigured, OTP_RESEND_SECONDS, supabase } from './config';
+import { describeAuthError, type AuthFailure } from './otp';
+import { clearPending } from './pending';
 import { enterAccount, flushCloud, leaveAccount } from '../store/store';
 
-export type AuthStatus = 'loading' | 'signedOut' | 'signedIn' | 'error';
-export type AuthResult = { ok: true; needsVerification?: boolean } | { ok: false; message: string; unverified?: boolean };
+/** 'recovery' = the user proved ownership of the email with a reset code and must now choose a new password. */
+export type AuthStatus = 'loading' | 'signedOut' | 'signedIn' | 'recovery' | 'error';
+export type AuthResult = { ok: true; needsVerification?: boolean } | ({ ok: false } & AuthFailure);
 
 interface AuthCtx {
   status: AuthStatus;
@@ -16,11 +18,13 @@ interface AuthCtx {
   error: string;
   signUp: (email: string, password: string, displayName: string) => Promise<AuthResult>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
+  verifySignupOtp: (email: string, code: string) => Promise<AuthResult>;
+  resendSignupOtp: (email: string) => Promise<AuthResult>;
+  sendRecoveryCode: (email: string) => Promise<AuthResult>;
+  verifyRecoveryOtp: (email: string, code: string) => Promise<AuthResult>;
+  completeRecovery: (password: string) => Promise<AuthResult>;
+  cancelRecovery: () => Promise<void>;
   signOut: () => Promise<void>;
-  sendReset: (email: string) => Promise<AuthResult>;
-  updatePassword: (password: string) => Promise<AuthResult>;
-  resend: (email: string) => Promise<AuthResult>;
-  exchangeCode: (code: string) => Promise<AuthResult>;
   retry: () => void;
 }
 const Ctx = createContext<AuthCtx | null>(null);
@@ -30,14 +34,21 @@ export const useAuth = () => {
   return c;
 };
 
-const friendly = (m: string): string => {
-  const s = m.toLowerCase();
-  if (s.includes('invalid login')) return 'Email or password is incorrect.';
-  if (s.includes('rate limit') || s.includes('security purposes')) return 'Too many attempts. Wait a minute and try again.';
-  if (s.includes('weak') || s.includes('password should')) return 'Choose a stronger password (at least 8 characters).';
-  if (s.includes('same password')) return 'Choose a password different from your current one.';
-  if (s.includes('fetch') || s.includes('network')) return 'Can’t reach the server. Check your connection.';
-  return m;
+const RECOVERY_FLAG = 'br-recovery-pending';
+const readFlag = () => {
+  try {
+    return localStorage.getItem(RECOVERY_FLAG) === '1';
+  } catch {
+    return false;
+  }
+};
+const setFlag = (on: boolean) => {
+  try {
+    if (on) localStorage.setItem(RECOVERY_FLAG, '1');
+    else localStorage.removeItem(RECOVERY_FLAG);
+  } catch {
+    /* ignore */
+  }
 };
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -46,6 +57,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('');
   const loadedId = useRef<string | null>(null);
   const loading = useRef<string | null>(null);
+  const recovery = useRef<boolean>(readFlag());
+  const statusRef = useRef<AuthStatus>(status);
+  statusRef.current = status;
 
   const load = useCallback(async (u: User) => {
     if (loading.current === u.id) return;
@@ -53,13 +67,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus('loading');
     try {
       const data = await fetchAccountData(u.id);
+      // Make sure the display name chosen at sign-up is on the profile row.
+      const metaName = typeof u.user_metadata?.display_name === 'string' ? u.user_metadata.display_name.trim() : '';
+      if (!data.profile.display_name && metaName) {
+        await updateProfile(u.id, { display_name: metaName.slice(0, 80) });
+        data.profile.display_name = metaName.slice(0, 80);
+      }
       enterAccount(buildAccountDb({ id: u.id, email: u.email ?? '' }, data));
       loadedId.current = u.id;
       setUser(u);
       setError('');
       setStatus('signedIn');
     } catch (e) {
-      setError(friendly(e instanceof Error ? e.message : 'Couldn’t load your account.'));
+      setError(describeAuthError(e as Error, 'login').message);
       setStatus('error');
     } finally {
       loading.current = null;
@@ -68,6 +88,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const sync = useCallback(
     (session: Session | null) => {
+      if (recovery.current) {
+        // Reset-code session: stay on "New password"; do not load account data or open Discover.
+        if (session) {
+          setUser(session.user);
+          setStatus('recovery');
+        } else {
+          recovery.current = false;
+          setFlag(false);
+          setUser(null);
+          setStatus('signedOut');
+        }
+        return;
+      }
       if (!session) {
         if (loadedId.current) {
           leaveAccount(); // clear the previous user's visible data
@@ -93,85 +126,108 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!supabase) return;
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      // never await Supabase calls inside this callback; defer.
-      setTimeout(() => sync(session), 0);
+      setTimeout(() => sync(session), 0); // never await Supabase calls inside this callback
     });
     return () => data.subscription.unsubscribe();
   }, [sync]);
 
-  // Android: pause/resume token refresh with the app; open email links delivered as deep links.
-  const navigate = useNavigate();
+  // Android: pause/resume token refresh with the app; hardware Back never leaves the New-password step by accident.
   useEffect(() => {
-    if (!Capacitor.isNativePlatform() || !supabase) return;
+    if (!Capacitor.isNativePlatform()) return;
     const subs = [
       CapApp.addListener('appStateChange', ({ isActive }) => {
-        if (isActive) void supabase!.auth.startAutoRefresh();
+        if (!supabase) return;
+        if (isActive) void supabase.auth.startAutoRefresh();
         else {
           void flushCloud();
-          void supabase!.auth.stopAutoRefresh();
+          void supabase.auth.stopAutoRefresh();
         }
       }),
-      CapApp.addListener('appUrlOpen', ({ url }) => {
-        const link = parseAuthLink(url);
-        if (!link.kind) return;
-        const q = new URLSearchParams();
-        if (link.code) q.set('code', link.code);
-        if (link.error) q.set('error_description', link.error);
-        navigate(`/auth/${link.kind}?${q.toString()}`, { replace: true });
+      CapApp.addListener('backButton', ({ canGoBack }) => {
+        if (statusRef.current === 'recovery') return;
+        if (canGoBack) window.history.back();
+        else void CapApp.exitApp();
       }),
     ];
     return () => subs.forEach((s) => void s.then((h) => h.remove()));
-  }, [navigate]);
+  }, []);
 
   const api = useMemo<AuthCtx>(() => {
-    const need = () => {
+    const sb = () => {
       if (!supabase) throw new Error('Accounts are not configured in this build.');
       return supabase;
     };
+    const fail = (e: unknown, action: Parameters<typeof describeAuthError>[1]): AuthResult => ({ ok: false, ...describeAuthError(e as Error, action, OTP_RESEND_SECONDS) });
     return {
       status,
       user,
       error,
       async signUp(email, password, displayName) {
-        const { data, error: e } = await need().auth.signUp({
-          email: email.trim(),
-          password,
-          options: { emailRedirectTo: redirectUrl('callback'), data: { display_name: displayName.trim() } },
-        });
-        if (e) return { ok: false, message: friendly(e.message) };
+        const { data, error: e } = await sb().auth.signUp({ email: email.trim(), password, options: { data: { display_name: displayName.trim() } } });
+        if (e) return fail(e, 'signup');
         return { ok: true, needsVerification: !data.session };
       },
       async signIn(email, password) {
-        const { error: e } = await need().auth.signInWithPassword({ email: email.trim(), password });
-        if (e) return { ok: false, message: e.message.toLowerCase().includes('not confirmed') ? 'Verify your email first. Check your inbox for the link.' : friendly(e.message), unverified: e.message.toLowerCase().includes('not confirmed') };
+        const { error: e } = await sb().auth.signInWithPassword({ email: email.trim(), password });
+        return e ? fail(e, 'login') : { ok: true };
+      },
+      async verifySignupOtp(email, code) {
+        const { error: e } = await sb().auth.verifyOtp({ email: email.trim(), token: code, type: 'signup' });
+        return e ? fail(e, 'verify') : { ok: true };
+      },
+      async resendSignupOtp(email) {
+        const { error: e } = await sb().auth.resend({ type: 'signup', email: email.trim() });
+        return e ? fail(e, 'send') : { ok: true };
+      },
+      async sendRecoveryCode(email) {
+        // Supabase answers the same whether or not the address is registered.
+        const { error: e } = await sb().auth.resetPasswordForEmail(email.trim());
+        return e ? fail(e, 'send') : { ok: true };
+      },
+      async verifyRecoveryOtp(email, code) {
+        recovery.current = true; // set first so the SIGNED_IN event keeps us on "New password"
+        setFlag(true);
+        const { data, error: e } = await sb().auth.verifyOtp({ email: email.trim(), token: code, type: 'recovery' });
+        if (e || !data.session) {
+          recovery.current = false;
+          setFlag(false);
+          return e ? fail(e, 'verify') : fail({ message: 'Verification failed.' }, 'verify');
+        }
+        setUser(data.session.user);
+        setStatus('recovery');
         return { ok: true };
+      },
+      async completeRecovery(password) {
+        const { error: e } = await sb().auth.updateUser({ password });
+        if (e) return fail(e, 'password');
+        // Keep the recovery flag set until sign-out finishes so the USER_UPDATED event can't load account data.
+        await sb().auth.signOut({ scope: 'local' }).catch(() => {});
+        recovery.current = false;
+        setFlag(false);
+        leaveAccount();
+        loadedId.current = null;
+        setUser(null);
+        setStatus('signedOut');
+        return { ok: true };
+      },
+      async cancelRecovery() {
+        recovery.current = false;
+        setFlag(false);
+        if (supabase) await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        setUser(null);
+        setStatus('signedOut');
       },
       async signOut() {
         await flushCloud();
         if (supabase) await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
         leaveAccount();
+        clearPending();
         loadedId.current = null;
         setUser(null);
         setStatus('signedOut');
       },
-      async sendReset(email) {
-        const { error: e } = await need().auth.resetPasswordForEmail(email.trim(), { redirectTo: redirectUrl('recovery') });
-        return e ? { ok: false, message: friendly(e.message) } : { ok: true };
-      },
-      async updatePassword(password) {
-        const { error: e } = await need().auth.updateUser({ password });
-        return e ? { ok: false, message: friendly(e.message) } : { ok: true };
-      },
-      async resend(email) {
-        const { error: e } = await need().auth.resend({ type: 'signup', email: email.trim(), options: { emailRedirectTo: redirectUrl('callback') } });
-        return e ? { ok: false, message: friendly(e.message) } : { ok: true };
-      },
-      async exchangeCode(code) {
-        const { error: e } = await need().auth.exchangeCodeForSession(code);
-        return e ? { ok: false, message: e.message } : { ok: true };
-      },
       retry() {
-        void need().auth.getSession().then(({ data }) => {
+        void sb().auth.getSession().then(({ data }) => {
           loading.current = null;
           sync(data.session);
         });

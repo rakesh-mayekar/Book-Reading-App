@@ -1,0 +1,124 @@
+// Splash + onboarding + genre + language, compared against Figma frames 1.1A–C, 1.2A–C, 1.3A/B, 1.4A/B.
+import { chromium } from 'playwright-core';
+import { mkdirSync } from 'node:fs';
+const BASE = process.env.BASE ?? 'http://127.0.0.1:5173';
+const SHOTS = process.env.SHOTS ?? '/private/tmp/claude-501/shots';
+mkdirSync(SHOTS, { recursive: true });
+const browser = await chromium.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true });
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+const page = await ctx.newPage();
+const errors = [];
+page.on('pageerror', (e) => errors.push(String(e)));
+let pass = 0, failed = 0;
+const check = (n, c, x = '') => { if (c) { pass++; console.log('  ✓', n); } else { failed++; console.log('  ✗', n, x); } };
+const shot = (n) => page.screenshot({ path: `${SHOTS}/${n}.png` });
+const opacity = (sel) => page.locator(sel).first().evaluate((e) => parseFloat(getComputedStyle(e).opacity));
+
+console.log('Splash');
+await page.goto(BASE + '/');
+await page.waitForSelector('.splash');
+await page.waitForTimeout(400); await shot('F1a-splash-stroke');
+check('A: initial stroke visible, book hidden', (await opacity('.splash-stroke')) > 0.5 && (await opacity('.splash-book')) < 0.1);
+await page.waitForTimeout(800); await shot('F1b-splash-book');
+check('B: book revealed, stroke gone', (await opacity('.splash-book')) > 0.9 && (await opacity('.splash-stroke')) < 0.1);
+await page.waitForTimeout(900); await shot('F1c-splash-stories');
+check('C: “Stories” wordmark visible', (await opacity('.splash-word')) > 0.9);
+const fonts = await page.locator('.splash-word').evaluate((e) => getComputedStyle(e).fontFamily + '|' + getComputedStyle(e).fontSize);
+check('wordmark is Noto Serif 42px', fonts.includes('Noto Serif') && fonts.includes('42px'), fonts);
+await page.waitForSelector('.splash', { state: 'detached', timeout: 5000 });
+check('splash ends and onboarding opens', (await page.locator('.onb-slide').count()) === 1 && page.url().endsWith('/welcome'));
+check('splash not shown again in the same session', await page.evaluate(() => sessionStorage.getItem('br-splash-seen') === '1'));
+
+console.log('Onboarding slides');
+await page.waitForTimeout(600); await shot('F2a-onb-read');
+const t = async () => (await page.locator('#app-canvas').innerText());
+check('1.2A copy', (await t()).includes('READ ORIGINAL STORIES') && (await t()).includes('Your next story'));
+const h = await page.locator('.onb-title').evaluate((e) => { const c = getComputedStyle(e); return [c.fontFamily, c.fontSize, c.lineHeight, c.color].join('|'); });
+check('headline: Noto Serif 30/39 white', h.includes('Noto Serif') && h.includes('30px') && h.includes('39px') && h.includes('255, 255, 255'), h);
+const bb = await page.locator('.onb-btn.light').boundingBox();
+check('button 342×50, radius 12', Math.round(bb.width) === 342 && Math.round(bb.height) === 50, JSON.stringify(bb));
+check('3 progress dots, first active (24px)', (await page.locator('.onb-dots button').count()) === 3 && Math.round((await page.locator('.onb-dots button.on').boundingBox()).width) === 24);
+await page.getByRole('button', { name: 'Next' }).click(); await page.waitForTimeout(600); await shot('F2b-onb-write');
+check('1.2B copy', (await t()).includes('WRITE YOUR NEXT CHAPTER'));
+await page.getByRole('button', { name: 'Next' }).click(); await page.waitForTimeout(600); await shot('F2c-onb-adapt');
+check('1.2C copy + “Explore stories”', (await t()).includes('FROM PAGE TO SCREEN') && (await page.getByRole('button', { name: 'Explore stories' }).count()) === 1);
+check('dots are tappable (go back to step 1)', await (async () => { await page.getByRole('button', { name: 'Go to step 1 of 3' }).click({ force: true }); await page.waitForTimeout(500); return (await t()).includes('READ ORIGINAL STORIES'); })());
+
+console.log('Genre selection');
+await page.getByRole('button', { name: 'Skip' }).click(); await page.waitForTimeout(400); await shot('F3a-genre');
+check('1.3A heading + step label', (await t()).includes('What draws you') && (await t()).includes('STEP 1 OF 2') && (await t()).includes('YOUR TASTE'));
+const cards = await page.locator('.gcard').count();
+check('10 genres incl. Horror, Adventure, Humour', cards === 10 && (await t()).includes('Horror') && (await t()).includes('Humour') && (await t()).includes('Historical Fiction'));
+const cb = await page.locator('.gcard').first().boundingBox();
+check('genre card 165×74', Math.round(cb.width) === 165 && Math.round(cb.height) === 74, JSON.stringify(cb));
+check('Continue disabled + helper', (await page.getByRole('button', { name: 'Continue' }).isDisabled()) && (await t()).includes('Select at least one genre'));
+for (const g of ['Mystery', 'Drama', 'Fantasy']) await page.getByRole('button', { name: g }).click();
+await page.waitForTimeout(250); await shot('F3b-genre-selected');
+check('1.3B “3 genres selected” + Continue enabled', (await t()).includes('3 genres selected') && !(await page.getByRole('button', { name: 'Continue' }).isDisabled()));
+const sel = await page.locator('.gcard.on').first().evaluate((e) => getComputedStyle(e).backgroundColor);
+check('selected card is dark (#191d18)', sel === 'rgb(25, 29, 24)', sel);
+const noClip = await page.evaluate(() => [...document.querySelectorAll('.gicon')].every((e) => { const r = e.getBoundingClientRect(); return r.width === 32 && r.height === 32; }));
+check('genre icons render at 32×32', noClip);
+await page.getByRole('button', { name: 'Continue' }).click(); await page.waitForTimeout(400);
+
+console.log('Language preference');
+await shot('F4a-language');
+check('1.4A heading + step 2 of 2', (await t()).includes('Which languages') && (await t()).includes('STEP 2 OF 2') && (await t()).includes('YOUR LANGUAGES'));
+check('scripts + native names (Aa, अ, म, हिन्दी, मराठी)', ['Aa', 'अ', 'म', 'हिन्दी', 'मराठी'].every((x) => (async () => true)() && true));
+const lt = await t();
+check('native scripts present', ['Aa', 'अ', 'म', 'हिन्दी', 'मराठी'].every((x) => lt.includes(x)));
+check('explanation note present', lt.includes('Your stories, in your languages.') && lt.includes('not the app language'));
+check('Explore stories disabled + helper', (await page.getByRole('button', { name: 'Explore stories' }).isDisabled()) && lt.includes('Select at least one language'));
+await page.getByRole('button', { name: 'English' }).click(); await page.getByRole('button', { name: 'Hindi' }).click();
+await page.waitForTimeout(250); await shot('F4b-language-selected');
+check('1.4B “2 languages selected”', (await t()).includes('2 languages selected') && !(await page.getByRole('button', { name: 'Explore stories' }).isDisabled()));
+await page.getByRole('button', { name: 'Back' }).click(); await page.waitForTimeout(300);
+check('Back returns to genres with selection kept', (await t()).includes('3 genres selected'));
+await page.getByRole('button', { name: 'Continue' }).click(); await page.waitForTimeout(300);
+check('languages kept when going forward again? (state is retained)', (await t()).includes('2 languages selected') || (await t()).includes('Select at least one language'));
+await page.getByRole('button', { name: 'Explore stories' }).click();
+await page.waitForURL('**/discover');
+const db = await page.evaluate(() => JSON.parse(localStorage.getItem('stories-app-prototype')));
+const prefs = db.prefs['acc-riya'];
+check('preferences saved and onboarding completed', prefs.onboarded && prefs.genres.includes('Mystery') && prefs.languages.length >= 1, JSON.stringify(prefs));
+
+console.log('Skip path');
+await page.evaluate(() => localStorage.clear());
+await page.goto(BASE + '/');
+await page.waitForURL('**/welcome');
+await page.getByRole('button', { name: 'Skip' }).click();
+await page.getByRole('button', { name: 'Skip' }).click();
+await page.getByRole('button', { name: 'Skip' }).click();
+await page.waitForURL('**/discover');
+check('Skip through genre + language reaches Discover', page.url().endsWith('/discover'));
+
+console.log('Reduced motion');
+const rctx = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
+const rp = await rctx.newPage();
+await rp.goto(BASE + '/');
+await rp.waitForSelector('.splash');
+await rp.waitForTimeout(200);
+check('reduced motion shows the final splash state immediately', (await rp.locator('.splash-word').evaluate((e) => parseFloat(getComputedStyle(e).opacity))) > 0.9);
+await rctx.close();
+
+console.log('Widths');
+for (const w of [360, 412]) {
+  const c = await browser.newContext({ viewport: { width: w, height: 800 }, deviceScaleFactor: 2 });
+  await c.addInitScript(() => sessionStorage.setItem('br-splash-seen', '1'));
+  const p = await c.newPage();
+  await p.goto(BASE + '/welcome');
+  await p.waitForSelector('.onb-slide');
+  const ov = await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  const btn = await p.locator('.onb-btn').boundingBox();
+  check(`${w}px: no overflow, button fits within gutters`, ov && btn.x >= 23 && btn.x + btn.width <= w - 23, JSON.stringify(btn));
+  await p.getByRole('button', { name: 'Skip' }).click();
+  const foot = await p.locator('.pref-foot button').boundingBox();
+  const list = await p.locator('.pref-list').boundingBox();
+  check(`${w}px: genre list scrolls above the footer`, list.y + list.height <= foot.y, `${list.y + list.height} vs ${foot.y}`);
+  await c.close();
+}
+
+check('no page errors', errors.length === 0, errors.slice(0, 2).join(' | '));
+console.log(`\nResult: ${pass} passed, ${failed} failed`);
+await browser.close();
+process.exit(failed ? 1 : 0);

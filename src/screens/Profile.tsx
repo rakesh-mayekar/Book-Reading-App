@@ -32,12 +32,12 @@ export function Profile() {
   const photo = role === 'writer' && mode === 'demo' ? db.writers[id]?.photo : undefined;
   const account = mode === 'account' && isSupabaseConfigured;
   return (
-    <Page nav noBack title="Profile">
+    <Page nav noBack title="Profile" className="prof">
       <div className="stack">
         <div className="card row" style={{ gap: 14 }}>
           <Avatar name={name} photo={photo} />
           <div style={{ minWidth: 0 }}>
-            <h2 className="t-h2">{name}</h2>
+            <h2 className="fm-h2">{name}</h2>
             {account ? <p className="t-meta" style={{ overflowWrap: 'anywhere' }}>{db.realUser?.email}</p> : <p className="t-meta" style={{ textTransform: 'capitalize' }}>{role} · demo account</p>}
           </div>
         </div>
@@ -60,7 +60,7 @@ export function Profile() {
             </button>
           )}
         </div>
-        {account && <Button variant="secondary" icon={LogOut} onClick={() => setConfirm(true)}>Log out</Button>}
+        {account && <Button variant="secondary" arrow onClick={() => setConfirm(true)}>Log out</Button>}
         <p className="t-help">{account ? 'Writer accounts, story ownership and adaptation enquiries are still demo-only.' : 'Prototype: moderation, message delivery and rights checks are simulated locally.'}</p>
       </div>
       <ConfirmModal open={confirm} title="Log out?" confirmLabel="Log out" onCancel={() => setConfirm(false)} body="Your bookmarks and reading progress stay safe in your account. This device will forget them until you log in again." onConfirm={() => { setConfirm(false); void auth.signOut().then(() => navigate('/auth', { replace: true })); }} />
@@ -90,7 +90,7 @@ export function Privacy() {
   const mine = db.blocks.filter((b) => b.blockerId === id);
   const reports = db.reports.filter((r) => r.reporterId === id);
   return (
-    <Page title="Privacy & blocked contacts" fallback="/profile">
+    <Page title="Privacy & blocked contacts" fallback="/profile" className="prof">
       <div className="stack">
         <section className="stack-sm" aria-labelledby="bl-h">
           <h2 className="t-h2" id="bl-h">Blocked contacts</h2>
@@ -122,7 +122,7 @@ export function Demo() {
   const active = ACCOUNTS.find((a) => a.id === id);
   if (mode !== 'demo') return <Navigate to="/profile" replace />;
   return (
-    <Page title="Demo controls" fallback="/profile">
+    <Page title="Demo controls" fallback="/profile" className="prof">
       <div className="stack">
         <Notice icon={Wrench}>Testing tools for this prototype. Account switching is not a product feature. Stories, enquiries and messages are shared across accounts.</Notice>
         <div className="kv"><span className="k">Active account</span><span className="t-h3" data-testid="active-account">{active?.name} · {active?.tagline}</span></div>

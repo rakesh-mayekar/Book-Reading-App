@@ -154,6 +154,47 @@ function ch(id: string, title: string, body: string): Chapter {
   return { id, title, body };
 }
 
+const TRAIN_CHAPTERS: Chapter[] = [
+  ch('ch-train-1', 'The platform at dusk', `By the time Meera reached the station, the tea stall had closed. A single cup stood upside down on the counter, and the evening announcement drifted through the empty platform like a voice remembering an old song.
+
+She stopped beneath the clock. It had always been three minutes slow. When she was small, her father had said the station kept those minutes for people who needed one more goodbye.
+
+Tonight there was nobody to say goodbye to. There was only a bench, a flickering lamp, and the last train to Rajpur, due at 7:42 and, as always, a little late. Meera sat down, set her bag between her feet, and waited for the evening to decide what it wanted from her.
+
+The clock ticked toward the hour. Somewhere down the line, a signal changed from red to green, and the rails began, very softly, to hum.`),
+  ch('ch-train-2', 'A name on the envelope', `The letter was waiting in the seat beside her. Not on the table, where someone might have left it by mistake, but tucked beneath the edge of the cushion, as though it had been asked to stay.
+
+Meera noticed the handwriting before she noticed the name. The long, leaning letters. The careful line beneath the address. For a moment, the train seemed to move without her.
+
+The name on the envelope was her mother's. The postmark was from a town Meera had never heard her mention, and the date was twenty-two years old.
+
+She turned it over twice. The flap had been sealed and never opened. Outside the window, the last light gathered on the river, and small houses lit their lamps one by one, like people answering a question she had not yet asked.`),
+  ch('ch-train-3', 'The house beyond the river', `Rajpur was a single street and a station. The woman at the ticket window pointed across the river without looking up. "Everyone who gets off with a letter goes to the blue house," she said.
+
+Meera crossed the footbridge with the envelope held flat against her coat. The water below was dark and unhurried. On the far bank, a house stood with its shutters open, painted the faded blue of old school uniforms.
+
+A man opened the door before she knocked. He looked at the envelope, then at her face, then at the envelope again. "She said someone would come," he said. "I did not think it would take so long."
+
+He stepped aside. Inside, the hall smelled of tea and old paper, and a clock on the wall was exactly three minutes slow.`),
+  ch('ch-train-4', 'What the letter kept', `They read it at the kitchen table, the man on one side and Meera on the other, the lamp between them. Her mother's handwriting was younger there, quicker, with a slant that leaned toward the future.
+
+The letter did not explain everything. It named a promise, a delayed train, and a decision made in a hurry on a platform very like the one Meera had just left. It apologised once, plainly, and did not ask to be forgiven.
+
+"I kept it because she asked me to," the man said. "Not to send it. Only to keep it, until someone came who needed to know that the leaving was never about you."
+
+Meera folded the pages along their old creases. She had spent twenty-two years believing in a different story. It was strange how little it weighed to put that one down.`),
+  ch('ch-train-5', 'The journey home', `The last train back left at midnight. The man walked her to the platform, carrying the lamp, though the station had its own light.
+
+"You can come again," he said. "Without a letter."
+
+Meera nodded. She did not trust her voice yet. The train came in slowly, as if it, too, were reluctant to end the evening, and the doors opened onto a carriage with only one other passenger, asleep against the window.
+
+She took the seat by the aisle and set the unsent letter on her knee. As the platform slid away, she looked up at the station clock and found it was, for the first time she could remember, exactly right.
+
+She smiled at that. Then she turned the page over and began, in the margin, to write her own reply.`),
+];
+
+
 const UNSENT_CHAPTERS: Chapter[] = [
   ch('ch-unsent-1', 'The letter in the drawer', UNSENT_1),
   ch('ch-unsent-2', 'What we never said', UNSENT_2),
@@ -185,6 +226,21 @@ export function createSeed(): DB {
   const stories: Story[] = [
     published(
       {
+        id: 'story-last-train',
+        writerId: 'w-asha',
+        title: 'The Last Train',
+        synopsis: 'Two strangers. A forgotten letter. One last journey home. A quiet mystery about the people we lose and the stories that bring us back.',
+        genre: 'Mystery',
+        language: 'English',
+        coverId: 'train',
+        status: 'completed',
+        adaptationOpen: true,
+        chapters: TRAIN_CHAPTERS,
+      },
+      40,
+    ),
+    published(
+      {
         id: 'story-unsent-page',
         writerId: 'acc-mira',
         title: 'The Unsent Page',
@@ -192,7 +248,7 @@ export function createSeed(): DB {
           'An unsent letter brings two sisters back to their childhood home, where the things they never said begin to change how they remember their family.',
         genre: 'Drama',
         language: 'English',
-        coverId: 'dusk',
+        coverId: 'unsent',
         status: 'completed',
         adaptationOpen: true,
         chapters: UNSENT_CHAPTERS,
@@ -225,7 +281,7 @@ export function createSeed(): DB {
         synopsis: 'A clerk in a flooded port town discovers that the shipping ledger he inherited records cargo that was never loaded and people who never left.',
         genre: 'Mystery',
         language: 'English',
-        coverId: 'tide',
+        coverId: 'monsoon',
         status: 'completed',
         adaptationOpen: true,
         chapters: [
@@ -277,7 +333,7 @@ export function createSeed(): DB {
         writerId: 'w-arjun',
         title: 'Small Gods of Sector 9',
         synopsis: 'A maintenance drone in a sealed colony begins receiving prayers from residents who believe it can hear them. It cannot, until one night it does.',
-        genre: 'Sci-fi',
+        genre: 'Science Fiction',
         language: 'English',
         coverId: 'ink',
         status: 'ongoing',
@@ -296,7 +352,7 @@ export function createSeed(): DB {
     writerId: 'acc-mira',
     title: "The Lighthouse Keeper's Daughter",
     synopsis: 'In 1931, a girl on a remote island learns to keep the light after her father stops coming down from the tower.',
-    genre: 'Historical',
+    genre: 'Historical Fiction',
     language: 'English',
     coverId: 'tide',
     status: 'ongoing',
@@ -308,7 +364,7 @@ export function createSeed(): DB {
   };
   stories.push(lighthouse);
 
-  const defaultPrefs = (onboarded: boolean) => ({ onboarded, genres: [] as string[], languages: [] as string[], fontSize: 1, theme: 'light' as const });
+  const defaultPrefs = (onboarded: boolean) => ({ onboarded, genres: [] as string[], languages: [] as string[], fontSize: 1, theme: 'sepia' as const });
 
   return {
     version: DB_VERSION,
@@ -319,6 +375,7 @@ export function createSeed(): DB {
         name: 'Mira Sen',
         bio: 'I write quiet family dramas and the occasional unsettling thriller. Most of my stories start with a small object that refuses to stay in its drawer.',
       },
+      'w-asha': { id: 'w-asha', name: 'Asha Rao', bio: 'Quiet mysteries. Unforgettable journeys.', sample: true },
       'w-arjun': { id: 'w-arjun', name: 'Arjun Rao', bio: 'Sample writer profile. Writes mystery and speculative fiction.', sample: true },
       'w-neha': { id: 'w-neha', name: 'Neha Kulkarni', bio: 'Sample writer profile. Writes romance and city stories in Hindi.', sample: true },
       'w-samir': { id: 'w-samir', name: 'Samir Qureshi', bio: 'Sample writer profile. Writes fantasy about ordinary people.', sample: true },

@@ -62,13 +62,13 @@ export function ConfirmModal({ open, title, body, confirmLabel, cancelLabel = 'C
 }) {
   const [busy, setBusy] = useState(false);
   return (
-    <Dialog open={open} onClose={onCancel} label={title} center>
+    <Dialog open={open} onClose={onCancel} label={title}>
       <h2 className="t-h2">{title}</h2>
       <div className="t-body muted">{body}</div>
       {children}
       <div className="stack-sm">
-        <Button variant="secondary" onClick={onCancel}>{cancelLabel}</Button>
-        <Button variant={destructive ? 'dangerSolid' : 'primary'} loading={busy} onClick={() => { setBusy(true); try { onConfirm(); } finally { setBusy(false); } }}>{confirmLabel}</Button>
+        <Button arrow variant={destructive ? 'dangerSolid' : 'primary'} loading={busy} onClick={() => { setBusy(true); try { onConfirm(); } finally { setBusy(false); } }}>{confirmLabel}</Button>
+        <button type="button" className="fm-cancel" onClick={onCancel}>{cancelLabel}</button>
       </div>
     </Dialog>
   );

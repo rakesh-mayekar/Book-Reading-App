@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useSaveStory } from '../components/SavePrompt';
 import { Link, Navigate } from 'react-router-dom';
 import { FileQuestion, ShieldAlert } from 'lucide-react';
 import { useDB } from '../store/store';
@@ -49,6 +50,7 @@ export function Home() {
 export function StoryCard({ story, showProgress }: { story: PubStory; showProgress?: boolean }) {
   const { db, id } = useMe();
   const saved = db.saved.some((s) => s.accountId === id && s.storyId === story.id);
+  const save = useSaveStory();
   const prog = db.progress.find((p) => p.accountId === id && p.storyId === story.id);
   const writer = db.writers[story.writerId]?.name ?? 'Unknown writer';
   const frac = prog ? Math.min(1, (prog.chapterIndex + prog.scroll) / Math.max(1, story.chapters.length)) : 0;
@@ -71,8 +73,34 @@ export function StoryCard({ story, showProgress }: { story: PubStory; showProgre
           {showProgress && prog && <Progress value={prog.completed ? 1 : frac} />}
         </div>
       </Link>
-      <IconButton className="bm" icon={saved ? BookmarkCheck : Bookmark} label={saved ? `Remove ${story.title} from saved` : `Save ${story.title}`} pressed={saved} onClick={() => actions.toggleSaved(id, story.id)} />
+      <IconButton className="bm" icon={saved ? BookmarkCheck : Bookmark} label={saved ? `Remove ${story.title} from saved` : `Save ${story.title}`} pressed={saved} onClick={() => save(story)} />
     </article>
   );
 }
 export { Ico };
+
+/** Vertical story card (Figma 1.5): 165×184 cover with save button, title, writer, meta, status. */
+export function StoryTile({ story }: { story: PubStory }) {
+  const { db, id, role } = useMe();
+  const saved = db.saved.some((s) => s.accountId === id && s.storyId === story.id);
+  const save = useSaveStory();
+  const writer = db.writers[story.writerId]?.name ?? 'Unknown writer';
+  return (
+    <article className="tile">
+      <div className="tile-cover">
+        <Link to={`/story/${story.id}`} aria-label={`${story.title} by ${writer}`}>
+          <Cover coverId={story.coverId} style={{ width: 165, height: 184, borderRadius: 12 }} />
+        </Link>
+        <button className="tile-save" aria-label={saved ? `Remove ${story.title} from saved` : `Save ${story.title}`} aria-pressed={saved} onClick={() => save(story)}>
+          <span><Ico i={Bookmark} size={20} />{saved && <i className="tile-fill" />}</span>
+        </button>
+      </div>
+      <Link to={`/story/${story.id}`} className="tile-text" tabIndex={-1}>
+        <h3>{story.title}</h3>
+        <p className="by">by {writer}</p>
+        <p className="meta">{story.genre} · {readingMinutes(story.chapters)} min</p>
+        <p className="state">{story.status === 'completed' ? 'Completed' : 'Ongoing'}{role === 'filmmaker' && story.adaptationOpen ? ' · Open to enquiries' : ''}</p>
+      </Link>
+    </article>
+  );
+}

@@ -1,13 +1,58 @@
 import { useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Ban, Film, Info, Lock, PencilLine } from 'lucide-react';
+import { Ban, Lock } from 'lucide-react';
 import { Page, toast } from '../components/Shell';
+import { artwork, icons } from '../assets/figma';
 import { Button, Chip, Cover, LinkButton, Notice, TextArea, TextField } from '../components/ui';
 import { SAMPLE_FILMMAKER_INTRO } from '../domain/seed';
-import { enquiryGate, publicStory, validateEnquiryDraft, validateIntro } from '../domain/rules';
+import { enquiryGate, publicStory, publishedStories, readingMinutes, validateEnquiryDraft, validateIntro, type PubStory } from '../domain/rules';
 import { FORMATS } from '../domain/types';
 import { actions } from '../store/store';
 import { NotFoundState, PermissionDenied, RoleOnly, useMe } from './common';
+
+export const storyMeta = (s: PubStory) => `${s.genre} · ${readingMinutes(s.chapters)} min · ${s.status === 'completed' ? 'Completed' : 'Ongoing'}`;
+
+export function StoryStrip({ story, writer, to }: { story: PubStory; writer: string; to?: string }) {
+  const inner = (
+    <>
+      <Cover coverId={story.coverId} style={{ width: 54, height: 80, borderRadius: 6 }} />
+      <div className="fm-strip-text"><h2>{story.title}</h2><p>by {writer}</p><p>{storyMeta(story)}</p></div>
+    </>
+  );
+  return to ? <Link to={to} className="fm-strip">{inner}</Link> : <div className="fm-strip">{inner}</div>;
+}
+
+/* Filmmaker home: stories that are open to adaptation (Figma 'Filmmaker UI 01'). */
+export function AdaptDiscover() {
+  const { db } = useMe();
+  const [q, setQ] = useState('');
+  const [kb, setKb] = useState(false);
+  const all = publishedStories(db).filter((s) => s.adaptationOpen);
+  const needle = q.trim().toLowerCase();
+  const shown = all.filter((s) => !needle || `${s.title} ${db.writers[s.writerId]?.name ?? ''} ${s.genre} ${s.synopsis}`.toLowerCase().includes(needle));
+  return (
+    <Page nav noBack title="Stories for the screen" className={`fm-home ${kb ? 'kb' : ''}`}>
+      <div className="stack">
+        <p className="fm-sub">Find a story you want to bring to life.</p>
+        <div className="d-search" role="search">
+          <img src={icons.search} alt="" width={24} height={24} />
+          <input type="search" placeholder="Search stories or writers" id="disc-search" aria-label="Search stories or writers" value={q} onChange={(e) => setQ(e.target.value)} onFocus={() => setKb(true)} onBlur={() => window.setTimeout(() => setKb(false), 300)} />
+        </div>
+        <div className="fm-banner"><img src={artwork.frame} alt="" /><span>From page<br />to possibility.</span></div>
+        <h2 className="fm-h2">Open to adaptation</h2>
+        {shown.length === 0 && <p className="fm-sub">{all.length ? 'No stories match your search.' : 'No stories are open to adaptation right now.'}</p>}
+        {shown.map((s) => (
+          <article key={s.id} className="fm-item">
+            <StoryStrip story={s} writer={db.writers[s.writerId]?.name ?? 'Unknown writer'} to={`/story/${s.id}`} />
+            <span className="pill">Open to enquiries</span>
+            <p className="fm-sub" style={{ color: 'var(--ink)' }}>{s.synopsis}</p>
+          </article>
+        ))}
+        <p className="fm-help">Availability is provided by writers. Discuss permission and terms directly before adapting a story.</p>
+      </div>
+    </Page>
+  );
+}
 
 export function Introduction() {
   const { db, id, role } = useMe();
@@ -21,15 +66,16 @@ export function Introduction() {
   const errors = validateIntro(f);
   const set = (k: keyof typeof f) => (v: string) => setF((x) => ({ ...x, [k]: v }));
   return (
-    <Page title="Professional introduction" fallback="/profile"
-      footer={<Button onClick={() => { setTried(true); if (Object.keys(errors).length) return; actions.saveFilmmakerProfile({ accountId: id, ...f, name: f.name.trim(), role: f.role.trim(), team: f.team.trim(), portfolio: f.portfolio.trim(), intro: f.intro.trim(), complete: true }); toast('Introduction saved'); navigate(next ?? '/profile', { replace: true }); }}>{next ? 'Save and continue' : 'Save introduction'}</Button>}>
+    <Page title="Your introduction" centerTitle fallback="/profile"
+      footer={<Button arrow onClick={() => { setTried(true); if (Object.keys(errors).length) return; actions.saveFilmmakerProfile({ accountId: id, ...f, name: f.name.trim(), role: f.role.trim(), team: f.team.trim(), portfolio: f.portfolio.trim(), intro: f.intro.trim(), complete: true }); toast('Introduction saved'); navigate(next ?? '/profile', { replace: true }); }}>{next ? 'Continue to enquiry' : 'Save introduction'}</Button>}>
       <div className="stack">
-        <p className="t-meta">Writers see this with your enquiry. It’s saved on this device and reused next time; you can edit it before you submit.</p>
-        <TextField label="Display name" value={f.name} onChange={set('name')} error={tried ? errors.name : ''} autoComplete="off" />
-        <TextField label="Professional role" value={f.role} onChange={set('role')} error={tried ? errors.role : ''} placeholder="e.g. Director, Producer" />
-        <TextField label="Team or company" optional value={f.team} onChange={set('team')} placeholder="e.g. Independent" />
-        <TextField label="Portfolio link" optional value={f.portfolio} onChange={set('portfolio')} error={tried ? errors.portfolio : ''} inputMode="url" placeholder="https://" help="Not verified by Stories." />
-        <TextArea label="Short introduction" value={f.intro} onChange={set('intro')} error={tried ? errors.intro : ''} />
+        <h1 className="fm-h1">Let the writer<br />meet you.</h1>
+        <p className="fm-sub">Add the professional details your enquiry will include. They’re saved on this device and reused next time.</p>
+        <TextField label="Display name *" value={f.name} onChange={set('name')} error={tried ? errors.name : ''} autoComplete="off" />
+        <TextField label="Your role *" value={f.role} onChange={set('role')} error={tried ? errors.role : ''} placeholder="e.g. Director, Producer" />
+        <TextField label="Studio / team · Optional" value={f.team} onChange={set('team')} placeholder="e.g. Independent" />
+        <TextField label="Portfolio link · Optional" value={f.portfolio} onChange={set('portfolio')} error={tried ? errors.portfolio : ''} inputMode="url" placeholder="Add a link to your work" help="Not verified by Stories." />
+        <TextArea label="Short introduction *" value={f.intro} onChange={set('intro')} error={tried ? errors.intro : ''} />
         <Button variant="secondary" onClick={() => setF({ ...SAMPLE_FILMMAKER_INTRO })}>Fill with sample introduction</Button>
         <p className="t-help">Sample data for testing. It is not a verified credential.</p>
       </div>
@@ -55,8 +101,10 @@ function Gate({ ctx, children }: { ctx: ReturnType<typeof useEnquiryContext>; ch
     if (gate.reason === 'duplicate') return <Navigate replace to={`/enquiries/${gate.existingId}`} />;
     const blocked = gate.reason === 'blocked';
     return (
-      <Page title="Adaptation enquiry" fallback={`/story/${storyId}`}>
+      <Page title="Adaptation enquiry" centerTitle fallback={`/story/${storyId}`}>
         <div className="stack">
+          <h1 className="fm-h1">{blocked ? 'Contact is unavailable.' : 'Not open right now.'}</h1>
+          <StoryStrip story={story} writer={db.writers[story.writerId]?.name ?? ''} />
           <Notice icon={blocked ? Lock : Ban} tone="err">{blocked ? 'Contact with this writer is unavailable in this prototype. You can unblock them in Profile → Privacy.' : 'The writer is not open to adaptation enquiries for this story right now. You can still read it for free.'}</Notice>
           <LinkButton to={`/story/${storyId}`}>Back to story</LinkButton>
         </div>
@@ -65,15 +113,6 @@ function Gate({ ctx, children }: { ctx: ReturnType<typeof useEnquiryContext>; ch
   }
   if (!db.filmmakers[id]?.complete) return <Navigate replace to={`/profile/introduction?next=${encodeURIComponent(`/story/${storyId}/enquire`)}`} />;
   return <>{children}</>;
-}
-
-function StoryStrip({ coverId, title, writer }: { coverId: string; title: string; writer: string }) {
-  return (
-    <div className="card row" style={{ gap: 12 }}>
-      <Cover coverId={coverId} style={{ width: 48, height: 66 }} />
-      <div><p className="t-meta">Enquiring about</p><p className="t-h3">{title}</p><p className="t-meta">by {writer}</p></div>
-    </div>
-  );
 }
 
 export function EnquiryForm() {
@@ -87,18 +126,17 @@ export function EnquiryForm() {
   return (
     <Gate ctx={ctx}>
       {story && (
-        <Page title="New enquiry" fallback={`/story/${storyId}`}
-          footer={<><Button disabled={!valid} onClick={() => navigate(`/story/${storyId}/enquire/review`)}>Review enquiry</Button>{!valid && <p className="t-help" style={{ textAlign: 'center' }}>Complete the required fields to continue.</p>}</>}>
+        <Page title="New enquiry" centerTitle fallback={`/story/${storyId}`}
+          footer={<><Button arrow disabled={!valid} onClick={() => navigate(`/story/${storyId}/enquire/review`)}>Review enquiry</Button>{!valid && <p className="t-help" style={{ textAlign: 'center' }}>Complete the required fields to continue.</p>}</>}>
           <div className="stack">
-            <StoryStrip coverId={story.coverId} title={story.title} writer={db.writers[story.writerId]?.name ?? ''} />
-            <Notice icon={Info}>Submitting starts a discussion request. The writer chooses whether to accept. No phone number or email is needed.</Notice>
-            <TextField label="Project title" value={draft.projectTitle} onChange={(v) => set({ projectTitle: v })} onBlur={() => setTried(true)} error={tried ? errors.projectTitle : ''} placeholder="e.g. The Unsent Page — Short Film" maxLength={100} />
-            <fieldset className="field"><legend className="label">Intended format</legend>
+            <StoryStrip story={story} writer={db.writers[story.writerId]?.name ?? ''} />
+            <TextField label="Project title *" value={draft.projectTitle} onChange={(v) => set({ projectTitle: v })} onBlur={() => setTried(true)} error={tried ? errors.projectTitle : ''} placeholder="e.g. The Unsent Page — Short Film" maxLength={100} />
+            <fieldset className="field"><legend className="label">Intended format *</legend>
               <div className="chips" role="radiogroup" aria-label="Intended format">{FORMATS.map((f) => <Chip radio key={f} selected={draft.format === f} onClick={() => set({ format: f })}>{f}</Chip>)}</div>
               {tried && errors.format && <p className="t-error" role="alert">{errors.format}</p>}</fieldset>
-            <TextArea label="Proposal" value={draft.proposal} onChange={(v) => set({ proposal: v })} onBlur={() => setTried(true)} error={tried ? errors.proposal : ''} help="What you’d like to make and how you’d involve the writer." style={{ minHeight: 160 }} />
-            <p className="t-help">Draft saved on this device as you type.</p>
-            <Link className="btn-link" to={`/profile/introduction?next=${encodeURIComponent(`/story/${storyId}/enquire`)}`}><PencilLine size={18} aria-hidden="true" /> Edit my introduction</Link>
+            <TextArea label="Your proposal *" value={draft.proposal} onChange={(v) => set({ proposal: v })} onBlur={() => setTried(true)} error={tried ? errors.proposal : ''} help="Explain your approach and what you would like to discuss. Avoid including personal contact details." style={{ minHeight: 160 }} />
+            <div className="fm-box"><h3>A request starts a discussion.</h3><p>The writer chooses whether to accept. No phone number or email is needed. Draft saved on this device as you type.</p></div>
+            <Link className="fm-link" to={`/profile/introduction?next=${encodeURIComponent(`/story/${storyId}/enquire`)}`}>Edit my introduction</Link>
             <span hidden>{id}</span>
           </div>
         </Page>
@@ -116,6 +154,7 @@ export function EnquiryReview() {
   const locked = useRef(false);
   const p = db.filmmakers[id];
   if (ctx.role === 'filmmaker' && story && Object.keys(validateEnquiryDraft(draft)).length) return <Navigate replace to={`/story/${storyId}/enquire`} />;
+  const writer = story ? db.writers[story.writerId]?.name ?? '' : '';
   const submit = () => {
     if (locked.current) return;
     locked.current = true;
@@ -138,15 +177,24 @@ export function EnquiryReview() {
   return (
     <Gate ctx={ctx}>
       {story && p && (
-        <Page title="Review enquiry" fallback={`/story/${storyId}/enquire`}
-          footer={<><Button loading={busy} onClick={submit}>{busy ? 'Submitting…' : 'Submit enquiry'}</Button><Button variant="secondary" disabled={busy} onClick={() => navigate(`/story/${storyId}/enquire`)}>Edit enquiry</Button></>}>
+        <Page title="Review enquiry" centerTitle fallback={`/story/${storyId}/enquire`}
+          footer={<><Button arrow loading={busy} onClick={submit}>{busy ? 'Sending…' : 'Send enquiry'}</Button><Button variant="secondary" disabled={busy} onClick={() => navigate(`/story/${storyId}/enquire`)}>Edit enquiry</Button></>}>
           <div className="stack">
+            <h1 className="fm-h1">A thoughtful first step.</h1>
+            <p className="fm-sub">Check what {writer.split(' ')[0]} will receive.</p>
             {error && <Notice icon={Ban} tone="err">{error}</Notice>}
-            <StoryStrip coverId={story.coverId} title={story.title} writer={db.writers[story.writerId]?.name ?? ''} />
-            <section className="card stack-sm"><div className="row between"><h2 className="t-h3">From</h2><Link className="btn-link t-meta" to={`/profile/introduction?next=${encodeURIComponent(`/story/${storyId}/enquire/review`)}`}>Edit</Link></div>
-              <p className="t-h3">{p.name}</p><p className="t-meta">{p.role}{p.team ? ` · ${p.team}` : ''}</p>{p.portfolio && <p className="t-meta">{p.portfolio}</p>}<p className="t-body">{p.intro}</p></section>
-            <section className="card stack-sm"><div className="kv"><span className="k">Project title</span><span className="t-h3">{draft.projectTitle}</span></div><div className="kv"><span className="k">Intended format</span><span>{draft.format}</span></div><div className="kv"><span className="k">Proposal</span><p className="t-body" style={{ whiteSpace: 'pre-wrap' }}>{draft.proposal}</p></div></section>
-            <Notice icon={Film}>Submitting starts a discussion request. Acceptance opens a conversation only; adaptation rights are not granted.</Notice>
+            <StoryStrip story={story} writer={writer} />
+            <div className="fm-box">
+              <h3>{p.name} · {p.role}{p.team ? ` · ${p.team}` : ''}</h3>
+              <p>{p.intro}</p>
+              {p.portfolio && <p>{p.portfolio}</p>}
+              <Link className="fm-link" to={`/profile/introduction?next=${encodeURIComponent(`/story/${storyId}/enquire/review`)}`}>Edit introduction</Link>
+            </div>
+            <p className="fm-label">Project</p>
+            <p className="fm-val">{draft.projectTitle}<br />{draft.format}</p>
+            <p className="fm-label">Proposal</p>
+            <p className="fm-val" style={{ whiteSpace: 'pre-wrap' }}>{draft.proposal}</p>
+            <p className="fm-help">{writer.split(' ')[0]} can accept or decline. Messaging opens only after acceptance. Acceptance does not grant adaptation rights.</p>
           </div>
         </Page>
       )}

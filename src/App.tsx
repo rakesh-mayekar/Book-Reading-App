@@ -1,11 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Capacitor, SystemBars, SystemBarsStyle, SystemBarType } from '@capacitor/core';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { MobileShell } from './components/Shell';
 import { Onboarding } from './screens/Onboarding';
 import { Discover } from './screens/Discover';
 import { StoryDetails } from './screens/StoryDetails';
-import { Reader, ReadingDone } from './screens/Reader';
+import { Contents, Reader, ReadingDone } from './screens/Reader';
 import { Library } from './screens/Library';
 import { Author } from './screens/Author';
 import { Demo, Preferences, Privacy, Profile } from './screens/Profile';
@@ -13,7 +13,9 @@ import { ChapterEditor, Chapters, Preview, Publish, StorySetup, WriterDashboard,
 import { EnquiryForm, EnquiryReview, Introduction } from './screens/Filmmaker';
 import { Conversation, EnquiryDetail, EnquiryList } from './screens/Enquiries';
 import { Home, NotFoundState, RoleOnly, useMe } from './screens/common';
-import { AuthCallback, AuthScreen, ForgotPassword, ResetPassword, Splash } from './screens/Auth';
+import { SavePrompt } from './components/SavePrompt';
+import { BrandSplash, splashSeen } from './screens/BrandSplash';
+import { AuthScreen, ForgotPassword, OtpScreen, ResetPassword, Splash } from './screens/Auth';
 import { useAuth } from './auth/AuthProvider';
 import { isSupabaseConfigured } from './auth/config';
 import { onSyncError, useMode } from './store/store';
@@ -31,12 +33,14 @@ function Gate({ children }: { children: React.ReactNode }) {
     if (auth.status === 'error')
       return (
         <Splash>
-          <p className="t-error" style={{ color: '#fff' }}>{auth.error}</p>
+          <p className="t-error">{auth.error}</p>
           <Button onClick={auth.retry}>Try again</Button>
           <Button variant="secondary" onClick={() => void auth.signOut()}>Log out</Button>
         </Splash>
       );
     if (auth.status === 'signedOut' && !authPath) return <Navigate to="/auth" replace />;
+    // After a reset code is verified the user must set a new password before anything else.
+    if (auth.status === 'recovery' && pathname !== '/auth/reset') return <Navigate to="/auth/reset" replace />;
   }
   if (role === 'reader' && !db.prefs[id]?.onboarded && pathname !== '/welcome' && pathname !== '/profile/demo') return <Navigate to="/welcome" replace />;
   return <>{children}</>;
@@ -49,9 +53,10 @@ function useSystemBarStyle() {
   const { pathname } = useLocation();
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
-    const darkTop = pathname === '/welcome' || pathname === '/discover' || /^\/story\/[^/]+$/.test(pathname);
+    if (pathname === '/welcome') return; // onboarding sets its own bar style per step
+    const darkTop = pathname === '/discover' || /^\/story\/[^/]+$/.test(pathname);
     void SystemBars.setStyle({ style: darkTop ? SystemBarsStyle.Dark : SystemBarsStyle.Light, bar: SystemBarType.StatusBar }).catch(() => {});
-    void SystemBars.setStyle({ style: pathname === '/welcome' ? SystemBarsStyle.Dark : SystemBarsStyle.Light, bar: SystemBarType.NavigationBar }).catch(() => {});
+    void SystemBars.setStyle({ style: SystemBarsStyle.Light, bar: SystemBarType.NavigationBar }).catch(() => {});
   }, [pathname]);
 }
 
@@ -59,19 +64,23 @@ export default function App() {
   const { id } = useMe();
   useSystemBarStyle();
   useEffect(() => onSyncError(toast), []);
+  const [showSplash, setShowSplash] = useState(() => !splashSeen());
   return (
     <MobileShell>
+      <SavePrompt />
+      {showSplash && <BrandSplash onDone={() => setShowSplash(false)} />}
       <Gate>
         <Routes key={id}>
           <Route path="/" element={<Home />} />
           <Route path="/auth" element={<AuthScreen />} />
           <Route path="/auth/forgot" element={<ForgotPassword />} />
           <Route path="/auth/reset" element={<ResetPassword />} />
-          <Route path="/auth/callback" element={<AuthCallback kind="callback" />} />
-          <Route path="/auth/recovery" element={<AuthCallback kind="recovery" />} />
+          <Route path="/auth/verify" element={<OtpScreen purpose="signup" />} />
+          <Route path="/auth/forgot/code" element={<OtpScreen purpose="recovery" />} />
           <Route path="/welcome" element={<Onboarding />} />
           <Route path="/discover" element={<Discover />} />
           <Route path="/story/:id" element={<StoryDetails />} />
+          <Route path="/story/:id/contents" element={<Contents />} />
           <Route path="/story/:id/enquire" element={<EnquiryForm />} />
           <Route path="/story/:id/enquire/review" element={<EnquiryReview />} />
           <Route path="/read/:id" element={<Reader />} />

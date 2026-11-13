@@ -9,12 +9,23 @@ import { isSupabaseConfigured } from '../auth/config';
 export type Mode = 'demo' | 'account';
 const MODE_KEY = 'stories-app-mode';
 
+const GENRE_RENAMES: Record<string, string> = { 'Sci-fi': 'Science Fiction', Historical: 'Historical Fiction', Comedy: 'Humour' };
+const renameGenre = (g: string) => GENRE_RENAMES[g] ?? g;
+/** Older saved demo data used shorter genre names. */
+function migrateGenres(db: DB): DB {
+  return {
+    ...db,
+    stories: db.stories.map((s) => ({ ...s, genre: renameGenre(s.genre), published: s.published ? { ...s.published, genre: renameGenre(s.published.genre) } : null })),
+    prefs: Object.fromEntries(Object.entries(db.prefs).map(([k, v]) => [k, { ...v, genres: v.genres.map(renameGenre) }])),
+  };
+}
+
 function load(): DB {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as DB;
-      if (parsed && parsed.version === DB_VERSION) return parsed;
+      if (parsed && parsed.version === DB_VERSION) return migrateGenres(parsed);
     }
   } catch {
     /* fall through to seed */
@@ -47,11 +58,14 @@ const subscribe = (cb: () => void) => {
 let syncErrorHandler: (msg: string) => void = () => {};
 export const onSyncError = (fn: (msg: string) => void) => { syncErrorHandler = fn; };
 
+let persistOk = true;
 function persist() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(demoState));
+    persistOk = true;
   } catch {
-    /* storage full or unavailable: keep in memory */
+    /* storage full or unavailable: keep in memory, and let the editor say so */
+    persistOk = false;
   }
 }
 function setState(next: DB) {
@@ -79,6 +93,15 @@ if (typeof window !== 'undefined') {
 
 export function useDB(): DB {
   return useSyncExternalStore(subscribe, cur);
+}
+/** False when the last local save failed (e.g. storage full). The chapter editor shows "Changes not saved · Retry". */
+export const usePersistOk = (): boolean => useSyncExternalStore(subscribe, () => persistOk);
+/** Retry saving the current demo data (no-op for real accounts, which save through the backend). */
+export function retryPersist() {
+  if (mode === 'demo') {
+    persist();
+    emit();
+  }
 }
 export const useMode = (): Mode => useSyncExternalStore(subscribe, () => mode);
 export const getDB = () => cur();

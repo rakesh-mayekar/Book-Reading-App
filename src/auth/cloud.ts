@@ -49,7 +49,7 @@ export function buildAccountDb(user: { id: string; email: string }, data: Accoun
     progress,
     saved,
     prefs: {
-      [user.id]: { onboarded: data.profile.onboarded, genres: data.profile.genres, languages: data.profile.languages, fontSize: data.profile.reader_font_size, theme: data.profile.reader_theme },
+      [user.id]: { onboarded: data.profile.onboarded, genres: data.profile.genres.map((g) => ({ 'Sci-fi': 'Science Fiction', Historical: 'Historical Fiction', Comedy: 'Humour' })[g] ?? g), languages: data.profile.languages, fontSize: data.profile.reader_font_size, theme: data.profile.reader_theme },
     },
   };
 }

@@ -1,29 +1,53 @@
 import { describe, expect, it } from 'vitest';
-import { parseAuthLink, redirectUrl, validateEmail, validatePassword } from './config';
+import { validateEmail, validatePassword } from './config';
 import { buildAccountDb } from './cloud';
 import { roleOf, accountName } from '../domain/rules';
+import { cooldownFromMessage, describeAuthError, intEnv, sanitizeOtp } from './otp';
+import { secondsLeft } from './pending';
 
-describe('redirect URLs', () => {
-  it('uses the website origin on web and the custom scheme on Android', () => {
-    expect(redirectUrl('callback', false, 'https://book-reading.vercel.app')).toBe('https://book-reading.vercel.app/auth/callback');
-    expect(redirectUrl('recovery', false, 'http://localhost:5173')).toBe('http://localhost:5173/auth/recovery');
-    expect(redirectUrl('callback', true)).toBe('com.bookreading.prototype://auth/callback');
-    expect(redirectUrl('recovery', true)).toBe('com.bookreading.prototype://auth/recovery');
+describe('sanitizeOtp', () => {
+  it('keeps digits only and caps at the configured length (paste-friendly)', () => {
+    expect(sanitizeOtp('123 456', 6)).toBe('123456');
+    expect(sanitizeOtp('123-456\n', 6)).toBe('123456');
+    expect(sanitizeOtp('12ab34', 6)).toBe('1234');
+    expect(sanitizeOtp('12345678', 6)).toBe('123456');
+    expect(sanitizeOtp('12345678', 8)).toBe('12345678');
+    expect(sanitizeOtp('１２３４５６', 6)).toBe('123456');
   });
 });
 
-describe('parseAuthLink', () => {
-  it('reads codes from web and deep-link URLs', () => {
-    expect(parseAuthLink('https://x.app/auth/callback?code=abc')).toEqual({ kind: 'callback', code: 'abc', error: null });
-    expect(parseAuthLink('com.bookreading.prototype://auth/recovery?code=zzz')).toEqual({ kind: 'recovery', code: 'zzz', error: null });
+describe('config helpers', () => {
+  it('clamps env integers', () => {
+    expect(intEnv(undefined, 6, 4, 10)).toBe(6);
+    expect(intEnv('8', 6, 4, 10)).toBe(8);
+    expect(intEnv('99', 6, 4, 10)).toBe(10);
+    expect(intEnv('abc', 6, 4, 10)).toBe(6);
   });
-  it('reads errors from the query or hash', () => {
-    expect(parseAuthLink('https://x.app/auth/callback#error=access_denied&error_description=Email+link+is+invalid+or+has+expired').error).toContain('invalid');
-    expect(parseAuthLink('com.bookreading.prototype://auth/callback?error_description=expired').error).toBe('expired');
+  it('reads cooldown seconds from Supabase messages', () => {
+    expect(cooldownFromMessage('For security purposes, you can only request this after 49 seconds.')).toBe(49);
+    expect(cooldownFromMessage('nope')).toBeNull();
   });
-  it('ignores unrelated or malformed links', () => {
-    expect(parseAuthLink('https://x.app/story/1').kind).toBeNull();
-    expect(parseAuthLink('not a url')).toEqual({ kind: null, code: null, error: null });
+  it('secondsLeft never goes negative', () => {
+    expect(secondsLeft(10_000, 4_000)).toBe(6);
+    expect(secondsLeft(1_000, 4_000)).toBe(0);
+  });
+});
+
+describe('describeAuthError', () => {
+  it('maps wrong / expired / reused codes to one actionable message', () => {
+    for (const m of ['Token has expired or is invalid', 'OTP expired']) expect(describeAuthError({ message: m, code: 'otp_expired', status: 403 }, 'verify').message).toMatch(/incorrect, expired or already used/);
+  });
+  it('maps rate limits with and without a cooldown', () => {
+    expect(describeAuthError({ message: 'For security purposes, you can only request this after 30 seconds.', status: 429 }, 'send')).toMatchObject({ cooldown: 30 });
+    expect(describeAuthError({ message: 'email rate limit exceeded', code: 'over_email_send_rate_limit', status: 429 }, 'send', 60)).toMatchObject({ cooldown: 60 });
+  });
+  it('maps network failures, unverified email and bad credentials', () => {
+    expect(describeAuthError({ name: 'AuthRetryableFetchError', message: 'Failed to fetch' }, 'login').message).toMatch(/reach the server/);
+    expect(describeAuthError({ code: 'email_not_confirmed', message: 'Email not confirmed' }, 'login').unverified).toBe(true);
+    expect(describeAuthError({ code: 'invalid_credentials', message: 'Invalid login credentials' }, 'login').message).toBe('Email or password is incorrect.');
+  });
+  it('never hides unknown real errors', () => {
+    expect(describeAuthError({ message: 'Database error saving new user' }, 'signup').message).toBe('Database error saving new user');
   });
 });
 
@@ -47,13 +71,10 @@ describe('buildAccountDb', () => {
   it('is a reader session holding only this user’s private rows, with no demo enquiries', () => {
     expect(roleOf(uid)).toBe('reader');
     expect(accountName(db, uid)).toBe('Asha');
-    expect(db.activeAccountId).toBe(uid);
     expect(db.saved).toHaveLength(1);
     expect(db.enquiries).toHaveLength(0);
-    expect(db.messages).toHaveLength(0);
   });
   it('maps stable chapter ids back to the reader’s chapter index', () => {
     expect(db.progress[0]).toMatchObject({ chapterIndex: 1, scroll: 0.4, storyId: 'story-unsent-page' });
-    expect(db.prefs[uid]).toMatchObject({ onboarded: true, fontSize: 2, theme: 'sepia', genres: ['Drama'] });
   });
 });

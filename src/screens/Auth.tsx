@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { CircleCheck, MailCheck, Sparkles, TriangleAlert } from 'lucide-react';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { MailCheck, Sparkles, TriangleAlert } from 'lucide-react';
 import { useAuth } from '../auth/AuthProvider';
-import { isSupabaseConfigured, validateEmail, validatePassword } from '../auth/config';
+import { isSupabaseConfigured, OTP_LENGTH, OTP_RESEND_SECONDS, validateEmail, validatePassword } from '../auth/config';
+import { sanitizeOtp } from '../auth/otp';
+import { clearPending, readPending, secondsLeft, writePending, type OtpPurpose } from '../auth/pending';
 import { setMode } from '../store/store';
 import { Page, toast } from '../components/Shell';
 import { Button, Ico, Notice, TextField } from '../components/ui';
+import { useId } from 'react';
 
-function AuthFrame({ title, sub, children, back }: { title: string; sub?: string; children: React.ReactNode; back?: string }) {
+function AuthFrame({ title, sub, children, back, noBack }: { title: string; sub?: string; children: React.ReactNode; back?: string; noBack?: boolean }) {
   return (
-    <Page noBack={!back} fallback={back ?? '/auth'}>
+    <Page noBack={noBack ?? !back} fallback={back ?? '/auth'}>
       <div className="stack" style={{ paddingTop: 8 }}>
         <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'var(--dark)', color: '#fff', display: 'grid', placeItems: 'center' }}><Ico i={Sparkles} size={24} /></div>
         <div className="stack-sm"><h1 className="t-title">{title}</h1>{sub && <p className="t-meta">{sub}</p>}</div>
@@ -19,78 +22,110 @@ function AuthFrame({ title, sub, children, back }: { title: string; sub?: string
   );
 }
 
-/** Log in / Sign up */
+function OtpInput({ value, onChange, error, disabled }: { value: string; onChange: (v: string) => void; error?: string; disabled?: boolean }) {
+  const id = useId();
+  return (
+    <div className="field">
+      <label htmlFor={id}>Verification code</label>
+      <input
+        id={id}
+        className="input otp"
+        value={value}
+        onChange={(e) => onChange(sanitizeOtp(e.target.value, OTP_LENGTH))}
+        inputMode="numeric"
+        pattern="[0-9]*"
+        autoComplete="one-time-code"
+        autoCapitalize="none"
+        spellCheck={false}
+        enterKeyHint="done"
+        placeholder={'•'.repeat(OTP_LENGTH)}
+        aria-invalid={!!error}
+        aria-describedby={`${id}-d`}
+        disabled={disabled}
+      />
+      <div id={`${id}-d`}>{error ? <p className="t-error" role="alert">{error}</p> : <p className="t-help">Enter the {OTP_LENGTH}-digit code. You can paste it.</p>}</div>
+    </div>
+  );
+}
+
+interface LoginState { tab?: 'login' | 'signup'; email?: string; name?: string; notice?: string }
+
+/** Log in / Create account */
 export function AuthScreen() {
   const auth = useAuth();
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'login' | 'signup'>('login');
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
+  const loc = useLocation();
+  const st = (loc.state ?? {}) as LoginState;
+  const [tab, setTab] = useState<'login' | 'signup'>(st.tab ?? 'login');
+  const [name, setName] = useState(st.name ?? '');
+  const [email, setEmail] = useState(st.email ?? '');
   const [password, setPassword] = useState('');
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
   const [msg, setMsg] = useState('');
   const [unverified, setUnverified] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [cool, setCool] = useState(0);
-  useEffect(() => {
-    if (cool <= 0) return;
-    const t = setTimeout(() => setCool(cool - 1), 1000);
-    return () => clearTimeout(t);
-  }, [cool]);
 
   if (auth.status === 'signedIn') return <Navigate to="/" replace />;
+  if (auth.status === 'recovery') return <Navigate to="/auth/reset" replace />;
   const errors = { name: tab === 'signup' && name.trim().length < 2 ? 'Enter your name.' : '', email: validateEmail(email), password: tab === 'signup' ? validatePassword(password) : password ? '' : 'Enter your password.' };
   const invalid = Object.values(errors).some(Boolean);
 
+  const toVerify = (cooldownSecs: number) => {
+    writePending({ email: email.trim(), name: name.trim(), purpose: 'signup', resendAt: Date.now() + cooldownSecs * 1000 });
+    navigate('/auth/verify');
+  };
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTried(true);
     setMsg('');
     setUnverified(false);
-    if (invalid || busy) return;
+    if (invalid || lock.current) return;
+    lock.current = true;
     setBusy(true);
     const r = tab === 'login' ? await auth.signIn(email, password) : await auth.signUp(email, password, name);
+    lock.current = false;
     setBusy(false);
     if (!r.ok) {
+      if (tab === 'signup' && r.cooldown) return afterSignupError(r);
       setMsg(r.message);
       setUnverified(!!r.unverified);
     } else if (tab === 'signup' && r.needsVerification) {
-      setSent(true);
-      setCool(30);
+      toVerify(OTP_RESEND_SECONDS);
     }
   };
-  const resend = async () => {
-    if (cool > 0) return;
-    const r = await auth.resend(email);
-    setCool(30);
-    toast(r.ok ? 'Verification email sent' : r.message);
+  const afterSignupError = (r: { ok: false; message: string; cooldown?: number }) => {
+    // A code for this address was sent moments ago: go and enter it instead of dead-ending.
+    if (tab === 'signup' && r.cooldown) toVerify(r.cooldown);
   };
-
-  if (sent)
-    return (
-      <AuthFrame title="Check your email" sub={`We sent a verification link to ${email.trim()}. Open it on this device to finish creating your account.`}>
-        <Notice icon={MailCheck}>Can’t find it? Check spam, or resend after a short wait. The link expires, and you can request a new one.</Notice>
-        <Button variant="secondary" disabled={cool > 0} onClick={resend}>{cool > 0 ? `Resend in ${cool}s` : 'Resend verification email'}</Button>
-        <button className="btn-link" onClick={() => { setSent(false); setTab('login'); }}>Back to log in</button>
-      </AuthFrame>
-    );
+  const verifyExisting = async () => {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    const r = await auth.resendSignupOtp(email); // a fresh code, then the verification screen
+    lock.current = false;
+    setBusy(false);
+    if (r.ok) toVerify(OTP_RESEND_SECONDS);
+    else if (r.cooldown) toVerify(r.cooldown); // a code was sent recently: go enter it
+    else setMsg(r.message);
+  };
 
   return (
     <AuthFrame title="Stories" sub="Sign in to keep your bookmarks and reading progress on every device.">
+      {st.notice && <Notice icon={MailCheck} tone="ok">{st.notice}</Notice>}
       {!isSupabaseConfigured && <Notice icon={TriangleAlert} tone="warn">Accounts aren’t configured in this build (missing Supabase environment variables). Demo mode still works.</Notice>}
       <div role="tablist" aria-label="Account" className="segment">
-        <button role="tab" aria-selected={tab === 'login'} onClick={() => { setTab('login'); setMsg(''); }}>Log in</button>
-        <button role="tab" aria-selected={tab === 'signup'} onClick={() => { setTab('signup'); setMsg(''); }}>Create account</button>
+        <button role="tab" aria-selected={tab === 'login'} onClick={() => { setTab('login'); setMsg(''); setUnverified(false); }}>Log in</button>
+        <button role="tab" aria-selected={tab === 'signup'} onClick={() => { setTab('signup'); setMsg(''); setUnverified(false); }}>Create account</button>
       </div>
       <form className="stack" onSubmit={submit} noValidate>
-        {tab === 'signup' && <TextField label="Your name" value={name} onChange={setName} error={tried ? errors.name : ''} autoComplete="name" />}
+        {tab === 'signup' && <TextField label="Display name" value={name} onChange={setName} error={tried ? errors.name : ''} autoComplete="name" maxLength={80} />}
         <TextField label="Email" type="email" inputMode="email" value={email} onChange={setEmail} error={tried ? errors.email : ''} autoComplete="email" autoCapitalize="none" />
         <TextField label="Password" type="password" value={password} onChange={setPassword} error={tried ? errors.password : ''} help={tab === 'signup' ? 'At least 8 characters.' : undefined} autoComplete={tab === 'login' ? 'current-password' : 'new-password'} />
         {msg && <Notice icon={TriangleAlert} tone="err">{msg}</Notice>}
-        {unverified && <Button variant="secondary" disabled={cool > 0} onClick={resend}>{cool > 0 ? `Resend in ${cool}s` : 'Resend verification email'}</Button>}
-        <Button type="submit" loading={busy} disabled={!isSupabaseConfigured}>{tab === 'login' ? 'Log in' : 'Create account'}</Button>
-        {tab === 'login' && <Link className="btn-link" to="/auth/forgot">Forgot password?</Link>}
+        {unverified && <Button variant="secondary" loading={busy} onClick={verifyExisting}>Verify my email</Button>}
+        <Button type="submit" loading={busy && !unverified} disabled={!isSupabaseConfigured}>{tab === 'login' ? 'Log in' : 'Create account'}</Button>
+        {tab === 'login' && <Link className="btn-link" to="/auth/forgot" state={{ email }}>Forgot password?</Link>}
       </form>
       <div className="card stack-sm">
         <p className="t-h3">Just looking around?</p>
@@ -101,68 +136,122 @@ export function AuthScreen() {
   );
 }
 
-export function ForgotPassword() {
+/** One screen for both "Verify your email" (signup) and the password-reset code. */
+export function OtpScreen({ purpose }: { purpose: OtpPurpose }) {
   const auth = useAuth();
-  const [email, setEmail] = useState('');
-  const [tried, setTried] = useState(false);
+  const navigate = useNavigate();
+  const pending = readPending(purpose);
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-  const [msg, setMsg] = useState('');
-  const err = validateEmail(email);
+  const [resending, setResending] = useState(false);
+  const [left, setLeft] = useState(() => (pending ? secondsLeft(pending.resendAt) : 0));
+  const verifyLock = useRef(false);
+  const resendLock = useRef(false);
+  const lastTried = useRef('');
+  const signup = purpose === 'signup';
+
+  useEffect(() => {
+    if (!pending) return;
+    const t = setInterval(() => setLeft(secondsLeft(pending.resendAt)), 500);
+    return () => clearInterval(t);
+  }, [pending?.resendAt]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const verify = async (value = code) => {
+    if (!pending || value.length !== OTP_LENGTH || verifyLock.current) return;
+    verifyLock.current = true;
+    lastTried.current = value;
+    setBusy(true);
+    setError('');
+    const r = signup ? await auth.verifySignupOtp(pending.email, value) : await auth.verifyRecoveryOtp(pending.email, value);
+    verifyLock.current = false;
+    if (!r.ok) {
+      setBusy(false);
+      setError(r.message);
+      return;
+    }
+    clearPending();
+    if (signup) toast('Email verified');
+    else navigate('/auth/reset', { replace: true });
+    // signup: the auth listener loads the account, then this screen redirects to Discover
+    setBusy(false);
+  };
+
+  // Auto-submit once a full code is entered (once per distinct code).
+  useEffect(() => {
+    if (code.length === OTP_LENGTH && code !== lastTried.current) void verify(code);
+  }, [code]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const resend = async () => {
+    if (!pending || left > 0 || resendLock.current) return;
+    resendLock.current = true;
+    setResending(true);
+    setError('');
+    const r = signup ? await auth.resendSignupOtp(pending.email) : await auth.sendRecoveryCode(pending.email);
+    resendLock.current = false;
+    setResending(false);
+    const secs = r.ok ? OTP_RESEND_SECONDS : (r.cooldown ?? 0);
+    writePending({ ...pending, resendAt: Date.now() + secs * 1000 });
+    setLeft(secs);
+    if (r.ok) {
+      setCode('');
+      lastTried.current = '';
+      toast('New code sent');
+    } else setError(r.message);
+  };
+
+  if (!pending) return <Navigate to={signup ? '/auth' : '/auth/forgot'} replace />;
+  if (signup && auth.status === 'signedIn') return <Navigate to="/" replace />;
+  if (!signup && auth.status === 'recovery') return <Navigate to="/auth/reset" replace />;
+
+  const working = busy || (signup && auth.status === 'loading');
   return (
-    <AuthFrame back="/auth" title="Reset password" sub="Enter your email and we’ll send a link to choose a new password.">
-      {done ? (
-        <Notice icon={MailCheck} tone="ok">If an account exists for {email.trim()}, a reset link is on its way. Open it on this device.</Notice>
-      ) : (
-        <form className="stack" noValidate onSubmit={async (e) => { e.preventDefault(); setTried(true); if (err || busy) return; setBusy(true); const r = await auth.sendReset(email); setBusy(false); if (r.ok) setDone(true); else setMsg(r.message); }}>
-          <TextField label="Email" type="email" inputMode="email" value={email} onChange={setEmail} error={tried ? err : ''} autoComplete="email" autoCapitalize="none" />
-          {msg && <Notice icon={TriangleAlert} tone="err">{msg}</Notice>}
-          <Button type="submit" loading={busy}>Send reset link</Button>
-        </form>
-      )}
+    <AuthFrame back={signup ? '/auth' : '/auth/forgot'} title={signup ? 'Verify your email' : 'Enter reset code'}
+      sub={signup ? `We sent a ${OTP_LENGTH}-digit code to ${pending.email}.` : `If an account exists for ${pending.email}, we sent a ${OTP_LENGTH}-digit code.`}>
+      <OtpInput value={code} onChange={(v) => { setCode(v); if (error) setError(''); }} error={error} disabled={working} />
+      <Button loading={working} disabled={code.length !== OTP_LENGTH} onClick={() => void verify()}>{signup ? 'Verify email' : 'Verify code'}</Button>
+      <Button variant="secondary" loading={resending} disabled={left > 0} onClick={() => void resend()}>{left > 0 ? `Resend code in ${left}s` : 'Resend code'}</Button>
+      <div className="row between wrap">
+        <button className="btn-link" onClick={() => { clearPending(); navigate(signup ? '/auth' : '/auth/forgot', { state: { tab: 'signup', email: pending.email, name: pending.name } }); }}>Use a different email</button>
+        {signup && <Link className="btn-link" to="/auth" onClick={() => clearPending()}>Log in instead</Link>}
+      </div>
+      {signup && <p className="t-help">Didn’t get it? Check spam. If you already have an account with this email, no new code is sent, so log in instead.</p>}
     </AuthFrame>
   );
 }
 
-const handled = new Set<string>();
-
-/** Landing page for email links (web route and Android deep link). kind = callback | recovery */
-export function AuthCallback({ kind }: { kind: 'callback' | 'recovery' }) {
+export function ForgotPassword() {
   const auth = useAuth();
   const navigate = useNavigate();
-  const [params] = useSearchParams();
-  const [state, setState] = useState<'working' | 'confirmed' | 'error'>('working');
-  const [message, setMessage] = useState('');
-  const ran = useRef(false);
-  useEffect(() => {
-    if (ran.current) return;
-    ran.current = true;
-    const code = params.get('code');
-    const err = params.get('error_description') ?? new URLSearchParams(window.location.hash.replace(/^#/, '')).get('error_description');
-    (async () => {
-      if (err) { setMessage(err.replace(/\+/g, ' ')); setState('error'); return; }
-      if (!code) { setMessage('This link is incomplete. Request a new one.'); setState('error'); return; }
-      if (handled.has(code)) return;
-      handled.add(code);
-      const r = await auth.exchangeCode(code);
-      if (r.ok) {
-        toast(kind === 'callback' ? 'Email verified. You’re signed in.' : 'Choose a new password.');
-        navigate(kind === 'callback' ? '/' : '/auth/reset', { replace: true });
-      } else if (kind === 'callback') {
-        // The email is confirmed by Supabase before redirecting; only the sign-in step needs this device's login.
-        setState('confirmed');
-      } else {
-        setMessage('This reset link can’t be used here. Open it on the device where you requested it, or request a new link.');
-        setState('error');
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const st = (useLocation().state ?? {}) as LoginState;
+  const [email, setEmail] = useState(st.email ?? '');
+  const [tried, setTried] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
+  const [msg, setMsg] = useState('');
+  const err = validateEmail(email);
+  if (auth.status === 'recovery') return <Navigate to="/auth/reset" replace />;
   return (
-    <AuthFrame title={state === 'working' ? 'One moment…' : state === 'confirmed' ? 'Email confirmed' : 'Link problem'}>
-      {state === 'working' && <div className="row"><span className="spinner" aria-hidden="true" /><span className="t-meta" role="status">Checking your link…</span></div>}
-      {state === 'confirmed' && <><Notice icon={CircleCheck} tone="ok">Your email is verified. Log in with your password to continue.</Notice><Link className="btn btn-primary block" to="/auth">Go to log in</Link></>}
-      {state === 'error' && <><Notice icon={TriangleAlert} tone="err">{message}</Notice><Link className="btn btn-primary block" to={kind === 'recovery' ? '/auth/forgot' : '/auth'}>{kind === 'recovery' ? 'Request a new link' : 'Back to log in'}</Link></>}
+    <AuthFrame back="/auth" title="Reset password" sub="Enter your email and we’ll send a code to choose a new password.">
+      <form className="stack" noValidate onSubmit={async (e) => {
+        e.preventDefault();
+        setTried(true);
+        if (err || lock.current) return;
+        lock.current = true;
+        setBusy(true);
+        const r = await auth.sendRecoveryCode(email);
+        lock.current = false;
+        setBusy(false);
+        if (r.ok || r.cooldown) {
+          // identical acknowledgement whether or not the email is registered
+          writePending({ email: email.trim(), purpose: 'recovery', resendAt: Date.now() + (r.ok ? OTP_RESEND_SECONDS : (r.cooldown ?? 0)) * 1000 });
+          navigate('/auth/forgot/code');
+        } else setMsg(r.message);
+      }}>
+        <TextField label="Email" type="email" inputMode="email" value={email} onChange={setEmail} error={tried ? err : ''} autoComplete="email" autoCapitalize="none" />
+        {msg && <Notice icon={TriangleAlert} tone="err">{msg}</Notice>}
+        <Button type="submit" loading={busy}>Send reset code</Button>
+      </form>
     </AuthFrame>
   );
 }
@@ -174,17 +263,36 @@ export function ResetPassword() {
   const [pw2, setPw2] = useState('');
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
   const [msg, setMsg] = useState('');
+  const finished = useRef(false); // set once the password is saved, so the redirect below doesn't race the confirmation navigation
   if (auth.status === 'loading') return <Splash />;
-  if (auth.status !== 'signedIn') return <Navigate to="/auth/forgot" replace />;
+  if (auth.status !== 'recovery') return finished.current ? null : <Navigate to="/auth" replace />;
   const errors = { pw: validatePassword(pw), pw2: pw2 !== pw ? 'Passwords don’t match.' : '' };
   return (
-    <AuthFrame title="Choose a new password">
-      <form className="stack" noValidate onSubmit={async (e) => { e.preventDefault(); setTried(true); if (errors.pw || errors.pw2 || busy) return; setBusy(true); const r = await auth.updatePassword(pw); setBusy(false); if (r.ok) { toast('Password updated'); navigate('/', { replace: true }); } else setMsg(r.message); }}>
+    <AuthFrame noBack title="New password" sub="Code verified. Choose a new password for your account.">
+      <form className="stack" noValidate onSubmit={async (e) => {
+        e.preventDefault();
+        setTried(true);
+        if (errors.pw || errors.pw2 || lock.current) return;
+        lock.current = true;
+        setBusy(true);
+        const email = auth.user?.email ?? '';
+        finished.current = true;
+        const r = await auth.completeRecovery(pw);
+        if (!r.ok) finished.current = false;
+        lock.current = false;
+        setBusy(false);
+        if (r.ok) {
+          clearPending();
+          navigate('/auth', { replace: true, state: { email, notice: 'Password updated. Log in with your new password.' } satisfies LoginState });
+        } else setMsg(r.message);
+      }}>
         <TextField label="New password" type="password" value={pw} onChange={setPw} error={tried ? errors.pw : ''} autoComplete="new-password" help="At least 8 characters." />
         <TextField label="Confirm password" type="password" value={pw2} onChange={setPw2} error={tried ? errors.pw2 : ''} autoComplete="new-password" />
         {msg && <Notice icon={TriangleAlert} tone="err">{msg}</Notice>}
-        <Button type="submit" loading={busy}>Update password</Button>
+        <Button type="submit" loading={busy}>Save new password</Button>
+        <button type="button" className="btn-link" onClick={() => void auth.cancelRecovery().then(() => navigate('/auth', { replace: true }))}>Cancel and log in</button>
       </form>
     </AuthFrame>
   );
@@ -192,7 +300,7 @@ export function ResetPassword() {
 
 export function Splash({ children }: { children?: React.ReactNode }) {
   return (
-    <div className="page onboard" style={{ alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24, textAlign: 'center' }}>
+    <div className="page" style={{ alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24, textAlign: 'center' }}>
       <span className="spinner" aria-hidden="true" />
       <p className="t-meta" role="status">Loading your account…</p>
       {children}

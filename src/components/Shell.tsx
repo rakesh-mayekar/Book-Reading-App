@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, BookOpen, Bookmark, Compass, Inbox, LayoutGrid, User } from 'lucide-react';
-import { IconButton, Ico } from './ui';
+import { ArrowLeft } from 'lucide-react';
+import { IconButton } from './ui';
+import { nav } from '../assets/figma';
 import { useDB, useMode } from '../store/store';
 import { roleOf } from '../domain/rules';
 
@@ -54,21 +55,26 @@ export function BottomNav() {
   const editing = useTextEditing();
   const role = roleOf(db.activeAccountId);
   const pending = db.enquiries.filter((e) => e.writerId === db.activeAccountId && e.status === 'pending').length;
-  const items =
+  type Item = { to: string; label: string; icon: string; badge?: number };
+  const home: Item = { to: '/discover', label: 'Discover', icon: nav.home };
+  const me: Item = { to: '/profile', label: 'Me', icon: nav.me };
+  const items: Item[] =
     role === 'writer'
-      ? [{ to: '/writer/dashboard', label: 'Studio', icon: LayoutGrid }, { to: '/discover', label: 'Discover', icon: Compass }, { to: '/enquiries', label: 'Enquiries', icon: Inbox, badge: pending }, { to: '/profile', label: 'Profile', icon: User }]
+      ? [home, { to: '/writer/dashboard', label: 'Write', icon: nav.write }, { to: '/enquiries', label: 'Inbox', icon: nav.inbox, badge: pending }, me]
       : role === 'filmmaker'
-        ? [{ to: '/discover', label: 'Discover', icon: Compass }, { to: '/library', label: 'Saved', icon: Bookmark }, { to: '/enquiries', label: 'Enquiries', icon: Inbox }, { to: '/profile', label: 'Profile', icon: User }]
-        : [{ to: '/discover', label: 'Discover', icon: Compass }, { to: '/library', label: 'Library', icon: BookOpen }, { to: '/profile', label: 'Profile', icon: User }];
+        ? [home, { to: '/library', label: 'Library', icon: nav.library }, { to: '/enquiries', label: 'Inbox', icon: nav.inbox }, me]
+        : [home, { to: '/library', label: 'Library', icon: nav.library }, me];
   return (
     <nav className={`bottom-nav ${editing ? 'hidden' : ''}`} aria-label="Main">
-      {items.map((it) => (
-        <NavLink key={it.to} to={it.to} replace>
-          <Ico i={it.icon} />
-          <span>{it.label}</span>
-          {!!it.badge && <span className="nav-badge" aria-label={`${it.badge} pending`}>{it.badge}</span>}
-        </NavLink>
-      ))}
+      <div className="nav-pill">
+        {items.map((it) => (
+          <NavLink key={it.to} to={it.to} replace className="nav-item">
+            <span className="nav-icon"><img src={it.icon} alt="" /></span>
+            <span>{it.label}</span>
+            {!!it.badge && <span className="nav-badge" aria-label={`${it.badge} pending`}>{it.badge}</span>}
+          </NavLink>
+        ))}
+      </div>
     </nav>
   );
 }
@@ -82,8 +88,8 @@ export function useBack(fallback: string) {
   };
 }
 
-export function Page({ title, fallback = '/', right, children, footer, nav, flush, header, noBack, className = '', theme, scrollRef, onScroll, onBack }: {
-  title?: string; fallback?: string; right?: ReactNode; children: ReactNode; footer?: ReactNode; nav?: boolean; flush?: boolean; header?: ReactNode; noBack?: boolean; className?: string; theme?: string;
+export function Page({ title, fallback = '/', right, children, footer, nav, flush, header, noBack, className = '', theme, scrollRef, onScroll, onBack, footerClass = '', centerTitle }: {
+  title?: string; fallback?: string; right?: ReactNode; children: ReactNode; footer?: ReactNode; nav?: boolean; flush?: boolean; header?: ReactNode; noBack?: boolean; className?: string; theme?: string; footerClass?: string; centerTitle?: boolean;
   scrollRef?: RefObject<HTMLElement>; onScroll?: () => void; onBack?: () => void;
 }) {
   const goBack = useBack(fallback);
@@ -101,10 +107,11 @@ export function Page({ title, fallback = '/', right, children, footer, nav, flus
       {header ?? (
         <header className="page-header">
           {!noBack && <IconButton icon={ArrowLeft} label="Back" onClick={onBack ?? goBack} />}
-          {title && <h1>{title}</h1>}
+          {title && <h1 className={centerTitle ? 'center' : ''}>{title}</h1>}
           {!title && <div style={{ flex: 1 }} />}
           {demoArea && <span className="demo-pill" title="Sample data stored on this device only">Demo</span>}
           {right}
+          {centerTitle && !right && <span style={{ width: 44, flex: 'none' }} aria-hidden="true" />}
         </header>
       )}
       <main
@@ -117,7 +124,7 @@ export function Page({ title, fallback = '/', right, children, footer, nav, flus
       >
         {children}
       </main>
-      {footer && <div className="footer-bar">{footer}</div>}
+      {footer && <div className={`footer-bar ${footerClass}`}>{footer}</div>}
       {nav && <BottomNav />}
     </div>
   );

@@ -153,7 +153,7 @@ describe('publishing', () => {
     expect(R.hasUnpublishedChanges({ ...pub, title: 'Changed' })).toBe(true);
   });
   it('seed reading time is about 12 minutes', () => {
-    const s = createSeed().stories[0];
+    const s = createSeed().stories.find((x) => x.id === 'story-unsent-page')!;
     expect(R.readingMinutes(s.chapters)).toBe(12);
   });
 });

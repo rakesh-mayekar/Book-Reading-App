@@ -3,10 +3,10 @@ export type EnquiryStatus = 'pending' | 'accepted' | 'declined' | 'withdrawn';
 export type StoryStatus = 'ongoing' | 'completed';
 export type ThemeName = 'light' | 'sepia' | 'dark';
 
-export const GENRES = ['Drama', 'Thriller', 'Mystery', 'Romance', 'Fantasy', 'Sci-fi', 'Historical', 'Comedy'] as const;
+export const GENRES = ['Mystery', 'Thriller', 'Romance', 'Drama', 'Fantasy', 'Science Fiction', 'Horror', 'Adventure', 'Historical Fiction', 'Humour'] as const;
 export const LANGUAGES = ['English', 'Hindi', 'Marathi'] as const;
 export const FORMATS = ['Short film', 'Feature film', 'Web series', 'Audio drama', 'Other'] as const;
-export const COVER_IDS = ['dusk', 'ink', 'tide', 'ember', 'moss', 'night'] as const;
+export const COVER_IDS = ['train', 'unsent', 'monsoon', 'dusk', 'ink', 'tide', 'ember', 'moss', 'night'] as const;
 export const REPORT_REASONS = ['Spam or misleading', 'Harassment or abuse', 'Impersonation', 'Inappropriate content', 'Something else'] as const;
 
 export interface DemoAccount {
@@ -21,6 +21,7 @@ export interface WriterProfile {
   name: string;
   bio: string;
   photo?: string; // optional data URL
+  languages?: string[]; // languages the writer writes in (local to the profile)
   sample?: boolean; // sample profile with no demo login
 }
 
@@ -144,6 +145,7 @@ export interface Filters {
   languages: string[];
   status: '' | StoryStatus;
   query: string;
+  openOnly?: boolean;
 }
 
 export interface DB {

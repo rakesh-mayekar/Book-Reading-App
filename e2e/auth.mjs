@@ -1,43 +1,77 @@
-// Browser test of the account flows against an in-memory FAKE Supabase (Auth + REST). Not a live-project test.
+// Browser test of the OTP account flows against an in-memory FAKE Supabase (Auth + REST). NOT a live-project test.
+// Usage: FAKE_OTP_LENGTH=6 BASE=http://127.0.0.1:5174 node e2e/auth.mjs
 import { chromium } from 'playwright-core';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomInt } from 'node:crypto';
 
 const BASE = process.env.BASE ?? 'http://127.0.0.1:5174';
+const LEN = parseInt(process.env.FAKE_OTP_LENGTH ?? '6', 10);
+const FAKE_COOLDOWN_MS = 6000; // server-side min interval; the app is configured with 3s so it can hit the 429 path
 const SB = 'https://fake-project.supabase.co';
 const browser = await chromium.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true });
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+await ctx.addInitScript(() => { try { sessionStorage.setItem('br-splash-seen', '1'); } catch {} });
 const page = await ctx.newPage();
 const errors = [];
+const logs = [];
 page.on('pageerror', (e) => errors.push(String(e)));
+page.on('console', (m) => logs.push(m.text()));
 
 // ---------- fake Supabase ----------
-const users = new Map(); // email -> {id,password,confirmed,name}
-const tokens = new Map(); // access token -> userId
-const codes = new Map(); // code -> userId
+const users = new Map();
+const tokens = new Map();
+const mail = []; // {email,type,token,used,expired}
+const lastSent = new Map();
 const tables = { profiles: new Map(), bookmarks: [], reading_progress: [] };
 const calls = [];
+let failNextVerify = 0;
 const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*', 'content-type': 'application/json' };
 const userJson = (u) => ({ id: u.id, aud: 'authenticated', role: 'authenticated', email: u.email, email_confirmed_at: u.confirmed ? new Date().toISOString() : null, app_metadata: {}, user_metadata: { display_name: u.name }, identities: [{}], created_at: new Date().toISOString() });
 const session = (u) => { const t = `tok-${randomUUID()}`; tokens.set(t, u.id); return { access_token: t, token_type: 'bearer', expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, refresh_token: `ref-${u.id}`, user: userJson(u) }; };
 const byId = (id) => [...users.values()].find((u) => u.id === id);
+const code = () => Array.from({ length: LEN }, () => randomInt(0, 10)).join('');
+const sendMail = (email, type) => {
+  const k = `${email}:${type}`;
+  const wait = lastSent.get(k) ? FAKE_COOLDOWN_MS - (Date.now() - lastSent.get(k)) : 0;
+  if (wait > 0) return Math.ceil(wait / 1000);
+  mail.filter((m) => m.email === email && m.type === type).forEach((m) => (m.used = true)); // newest code replaces older ones
+  mail.push({ email, type, token: code(), used: false, expired: false });
+  lastSent.set(k, Date.now());
+  return 0;
+};
+const latest = (email, type) => [...mail].reverse().find((m) => m.email === email && m.type === type && !m.used);
 const parseFilters = (url) => [...url.searchParams].filter(([k]) => !['select', 'on_conflict', 'order', 'columns'].includes(k)).map(([k, v]) => [k, v.replace(/^eq\./, '')]);
 
 await ctx.route(`${SB}/**`, async (route) => {
   const req = route.request();
   const url = new URL(req.url());
   const reply = (status, body) => route.fulfill({ status, headers: cors, body: body === undefined ? '' : JSON.stringify(body) });
+  const limited = (s) => reply(429, { code: 429, error_code: 'over_email_send_rate_limit', msg: `For security purposes, you can only request this after ${s} seconds.` });
   if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
   const body = req.postData() ? JSON.parse(req.postData()) : {};
   const uid = tokens.get((req.headers()['authorization'] ?? '').replace('Bearer ', ''));
   calls.push(`${req.method()} ${url.pathname}`);
   const p = url.pathname;
   if (p === '/auth/v1/signup') {
-    if (users.has(body.email)) return reply(200, userJson({ ...users.get(body.email), id: randomUUID() }));
+    const ex = users.get(body.email);
+    if (ex) { if (!ex.confirmed) { const w = sendMail(body.email, 'signup'); if (w) return limited(w); } return reply(200, userJson({ ...ex, id: ex.id })); }
     const u = { id: randomUUID(), email: body.email, password: body.password, confirmed: false, name: body.data?.display_name ?? '' };
     users.set(body.email, u);
-    tables.profiles.set(u.id, { id: u.id, display_name: u.name, genres: [], languages: [], onboarded: false, reader_font_size: 1, reader_theme: 'light' });
+    // the DB trigger copies display_name; simulate a project where it is missing for names starting "Carol"
+    tables.profiles.set(u.id, { id: u.id, display_name: u.name.startsWith('Carol') ? '' : u.name, genres: [], languages: [], onboarded: false, reader_font_size: 1, reader_theme: 'light' });
+    sendMail(body.email, 'signup');
     return reply(200, userJson(u));
   }
+  if (p === '/auth/v1/verify') {
+    if (failNextVerify > 0) { failNextVerify--; return route.abort('failed'); }
+    const m = latest(body.email, body.type);
+    if (!m || m.token !== body.token || m.expired) return reply(403, { code: 403, error_code: 'otp_expired', msg: 'Token has expired or is invalid' });
+    m.used = true;
+    const u = users.get(body.email);
+    if (body.type === 'signup') u.confirmed = true;
+    return reply(200, session(u));
+  }
+  if (p === '/auth/v1/resend') { const u = users.get(body.email); if (u && !u.confirmed) { const w = sendMail(body.email, 'signup'); if (w) return limited(w); } return reply(200, { message_id: 'x' }); }
+  if (p === '/auth/v1/recover') { const u = users.get(body.email); if (u) { const w = sendMail(body.email, 'recovery'); if (w) return limited(w); } return reply(200, {}); }
   if (p === '/auth/v1/token') {
     const g = url.searchParams.get('grant_type');
     if (g === 'password') {
@@ -46,23 +80,15 @@ await ctx.route(`${SB}/**`, async (route) => {
       if (!u.confirmed) return reply(400, { error_code: 'email_not_confirmed', msg: 'Email not confirmed' });
       return reply(200, session(u));
     }
-    if (g === 'pkce') {
-      const id = codes.get(body.auth_code);
-      if (!id) return reply(400, { error_code: 'flow_state_not_found', msg: 'invalid flow state, no valid flow state found' });
-      codes.delete(body.auth_code);
-      return reply(200, session(byId(id)));
-    }
     if (g === 'refresh_token') return reply(200, session(byId(body.refresh_token.replace('ref-', ''))));
   }
   if (p === '/auth/v1/user') {
     if (!uid) return reply(401, { msg: 'invalid JWT' });
     const u = byId(uid);
-    if (req.method() === 'PUT') { if (body.password) u.password = body.password; }
+    if (req.method() === 'PUT' && body.password) { if (body.password === u.password) return reply(422, { error_code: 'same_password', msg: 'New password should be different from the old password.' }); u.password = body.password; }
     return reply(200, userJson(u));
   }
   if (p === '/auth/v1/logout') return reply(204);
-  if (p === '/auth/v1/recover') { const u = users.get(body.email); if (u) codes.set(`rec-${u.id}`, u.id); return reply(200, {}); }
-  if (p === '/auth/v1/resend') return reply(200, {});
   if (p.startsWith('/rest/v1/')) {
     if (!uid) return reply(401, { message: 'JWT required' });
     const t = p.split('/').pop();
@@ -77,9 +103,8 @@ await ctx.route(`${SB}/**`, async (route) => {
     const rows = tables[t];
     if (req.method() === 'GET') return reply(200, mine(rows).filter(match));
     if (req.method() === 'POST') {
-      const key = t === 'bookmarks' ? ['story_id'] : ['story_id'];
-      const ex = rows.find((r) => r.user_id === uid && key.every((k) => r[k] === body[k]));
-      if (ex) { if (t === 'reading_progress') Object.assign(ex, body, { updated_at: new Date().toISOString() }); return reply(201); }
+      const ex = rows.find((r) => r.user_id === uid && r.story_id === body.story_id);
+      if (ex) { if (t === 'reading_progress') Object.assign(ex, body); return reply(201); }
       rows.push({ ...body, user_id: uid, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
       return reply(201);
     }
@@ -93,164 +118,207 @@ let pass = 0, failed = 0;
 const check = (n, c, x = '') => { if (c) { pass++; console.log('  ✓', n); } else { failed++; console.log('  ✗', n, x); } };
 const text = () => page.locator('#app-canvas').innerText();
 const has = async (t) => (await text()).includes(t);
-const go = async (path) => { await page.goto(BASE + path); await page.waitForLoadState('networkidle'); await page.waitForTimeout(150); };
-const ls = (k) => page.evaluate((key) => localStorage.getItem(key), k);
+const wait = (ms) => page.waitForTimeout(ms);
+const go = async (path) => { await page.goto(BASE + path); await page.waitForLoadState('networkidle'); await wait(150); };
 const field = (l, v) => page.getByLabel(l, { exact: true }).fill(v);
-async function login(email, pw) { await go('/auth'); await field('Email', email); await field('Password', pw); await page.getByRole('button', { name: 'Log in', exact: true }).click(); await page.waitForTimeout(500); }
-const verify = (email) => { users.get(email).confirmed = true; const c = `code-${randomUUID()}`; codes.set(c, users.get(email).id); return c; };
+const otpBox = () => page.getByLabel('Verification code');
+const btn = (n, exact = true) => page.getByRole('button', { name: n, exact });
+const verifyCalls = () => calls.filter((c) => c === 'POST /auth/v1/verify').length;
+const wrongCode = (real) => (real[0] === '1' ? '2' : '1') + real.slice(1);
+async function signup(name, email, pw) {
+  await go('/auth');
+  await page.getByRole('tab', { name: 'Create account' }).click();
+  await field('Display name', name); await field('Email', email); await field('Password', pw);
+  await btn('Create account').click();
+  await page.waitForURL('**/auth/verify', { timeout: 8000 }).catch(async () => { console.log('SIGNUP STUCK:', (await text()).replace(/\n+/g, ' / ').slice(0, 300)); throw new Error('signup did not reach verify'); });
+}
+async function login(email, pw) { await go('/auth'); await field('Email', email); await field('Password', pw); await btn('Log in').click(); await wait(500); }
+async function logout() { await go('/profile'); await btn('Log out').click(); await page.getByRole('dialog').getByRole('button', { name: 'Log out' }).click(); await page.waitForURL('**/auth'); }
+async function finishOnboarding() {
+  await btn('Skip').click();
+  await btn('Drama', false).click(); await btn('Continue').click();
+  await btn('English', false).click(); await btn('Explore stories').click(); await page.waitForURL('**/discover');
+}
 
 // ---------- tests ----------
+console.log(`OTP length ${LEN}`);
 console.log('Gate & validation');
 await go('/');
 check('unauthenticated visit is sent to /auth', page.url().endsWith('/auth'));
 await go('/library');
 check('private route redirects to /auth', page.url().endsWith('/auth'));
-await page.getByRole('button', { name: 'Log in', exact: true }).click();
+await btn('Log in').click();
 check('login validation messages', (await has('Enter your email address.')) && (await has('Enter your password.')));
 await page.getByRole('tab', { name: 'Create account' }).click();
-await field('Your name', 'Alice'); await field('Email', 'alice@example.com'); await field('Password', 'short');
-await page.getByRole('button', { name: 'Create account', exact: true }).click();
-check('password length validation', await has('Use at least 8 characters.'));
+await field('Display name', 'A'); await field('Email', 'bad'); await field('Password', 'short');
+await btn('Create account').click();
+check('signup validation (name, email, password)', (await has('Enter your name.')) && (await has('Enter a valid email address.')) && (await has('Use at least 8 characters.')));
 
-console.log('Sign-up, verification, login');
-await field('Password', 'correct-horse-9');
-await page.getByRole('button', { name: 'Create account', exact: true }).click();
-await page.waitForTimeout(400);
-check('check-your-email screen', await has('Check your email'));
-check('profile row created with display name', [...tables.profiles.values()].some((p) => p.display_name === 'Alice'));
-await login('alice@example.com', 'correct-horse-9');
-check('unverified login blocked with resend option', (await has('Verify your email first')) && (await page.getByRole('button', { name: /Resend verification/ }).count()) === 1);
+console.log('Registration + OTP verification');
+await signup('Alice', 'typo@example.com', 'correct-horse-9');
+check('“Verify your email” shows the entered email', (await has('Verify your email')) && (await has('typo@example.com')));
+check('numeric keyboard + one-time-code autofill', (await otpBox().getAttribute('inputmode')) === 'numeric' && (await otpBox().getAttribute('autocomplete')) === 'one-time-code');
+check('verify disabled until full code', await btn('Verify email').isDisabled());
+await otpBox().fill('ab12');
+check('non-digits are stripped', (await otpBox().inputValue()) === '12');
+await btn('Use a different email', false).click();
+await page.waitForURL('**/auth');
+check('correcting email returns to sign-up prefilled', (await page.getByLabel('Email', { exact: true }).inputValue()) === 'typo@example.com' && (await page.getByLabel('Display name').inputValue()) === 'Alice');
+await field('Email', 'alice@example.com'); await field('Password', 'correct-horse-9');
+await btn('Create account').click();
+await page.waitForURL('**/auth/verify');
+check('new email shown on verification screen', await has('alice@example.com'));
+const c1 = latest('alice@example.com', 'signup').token;
+await otpBox().fill(wrongCode(c1));
+await wait(400);
+check('incorrect code → clear error, stays on screen', (await has('incorrect, expired or already used')) && page.url().includes('/auth/verify'));
+check('Discover not opened before verification', !page.url().includes('/discover'));
+check('resend is on cooldown after sending', (await btn('Resend code in', false).count()) === 1 && (await btn('Resend code in', false).isDisabled()));
+await wait(3300);
+await btn('Resend code').click();
+await wait(500);
+check('resend before the server interval → rate-limit message + countdown', (await has('Please wait')) && (await btn('Resend code in', false).count()) === 1);
+await wait(3500);
+await btn('Resend code').click();
+await wait(500);
+const c2 = latest('alice@example.com', 'signup').token;
+check('resend after cooldown issues a new code', c2 !== c1);
+await otpBox().fill(c1);
+await wait(400);
+check('replaced (old) code is rejected', await has('incorrect, expired or already used'));
+// paste with spaces, full code, auto-verify
+const spaced = c2.slice(0, 3) + ' ' + c2.slice(3);
+await otpBox().fill(spaced);
+await page.waitForURL('**/welcome');
+check('pasted code with spaces verifies and opens the app', await has('Your next story'));
+check('display name persisted to the profile row', [...tables.profiles.values()].some((p) => p.display_name === 'Alice'));
+check('no password/OTP kept in local storage', !(await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage })).then((s) => s.includes('correct-horse-9') || s.includes(c2))));
+await finishOnboarding();
+
+console.log('Duplicate taps, network error, unverified login, name fallback');
+await logout();
+await signup('Bob', 'bob@example.com', 'another-pass-1');
+const bobCode = latest('bob@example.com', 'signup').token;
+failNextVerify = 1;
+await otpBox().fill(bobCode);
+await wait(500);
+check('network error is shown, not swallowed', await has('reach the server'));
+check('code kept so user can retry', (await otpBox().inputValue()) === bobCode);
+const before = verifyCalls();
+await btn('Verify email').dblclick();
+await page.waitForURL('**/welcome');
+check('double tap sends exactly one verification request', verifyCalls() - before === 1, `${verifyCalls() - before}`);
+await finishOnboarding();
+await go('/library');
+check('bob sees none of alice’s data', await has('Your library is empty'));
+await logout();
+await signup('Dave', 'dave@example.com', 'dave-pass-1234');
+await go('/auth');
+await field('Email', 'dave@example.com'); await field('Password', 'dave-pass-1234'); await btn('Log in').click();
+await wait(500);
+check('unverified login explains and offers verification', (await has('isn’t verified yet')) && (await btn('Verify my email').count()) === 1);
+await btn('Verify my email').click();
+await page.waitForURL('**/auth/verify');
+check('returns to verification for that email', await has('dave@example.com'));
+await otpBox().fill(latest('dave@example.com', 'signup').token);
+await page.waitForURL('**/welcome');
+check('unverified user can finish verification and log in', await has('Your next story'));
+await finishOnboarding();
+await logout();
+await signup('Carol', 'carol@example.com', 'carol-pass-1234');
+await otpBox().fill(latest('carol@example.com', 'signup').token);
+await page.waitForURL('**/welcome');
+await wait(300);
+check('display name saved to profile even if the DB trigger missed it', [...tables.profiles.values()].some((p) => p.display_name === 'Carol'));
+await finishOnboarding();
+await logout();
+
+console.log('Login, session, sync');
 await login('alice@example.com', 'wrong-password');
 check('wrong password message', await has('Email or password is incorrect.'));
-const code = verify('alice@example.com');
-await go(`/auth/callback?code=${code}`);
-await page.waitForURL('**/welcome');
-check('verification link signs in and starts onboarding', await has('Hello Alice'));
-check('no password stored locally', !(await page.evaluate(() => JSON.stringify(localStorage)).then((s) => s.includes('correct-horse-9'))));
-await page.getByRole('button', { name: 'Get started' }).click();
-await page.getByRole('button', { name: 'Skip intro' }).click();
-await page.getByRole('button', { name: 'Drama' }).click();
-await page.getByRole('button', { name: 'English' }).click();
-await page.getByRole('button', { name: 'Save and continue' }).click();
-await page.waitForURL('**/discover');
-await page.waitForTimeout(300);
-check('preferences saved to the profile table', JSON.stringify([...tables.profiles.values()].find((p) => p.display_name === 'Alice').genres) === '["Drama"]');
-
-console.log('Bookmarks & progress sync');
-await page.getByRole('button', { name: 'Save The Unsent Page' }).click();
-await page.waitForTimeout(300);
-check('bookmark stored for alice only', tables.bookmarks.length === 1 && tables.bookmarks[0].story_id === 'story-unsent-page' && tables.bookmarks[0].user_id === users.get('alice@example.com').id);
-await go('/read/story-unsent-page/2');
-await page.evaluate(() => { const m = document.querySelector('main.scroll'); m.scrollTop = 0.5 * (m.scrollHeight - m.clientHeight); });
-await page.waitForTimeout(2300);
-const pr = tables.reading_progress[0];
-check('progress stored with stable chapter id', pr?.chapter_id === 'ch-unsent-2' && pr.scroll > 0.3 && pr.story_id === 'story-unsent-page', JSON.stringify(pr));
-await page.reload(); await page.waitForLoadState('networkidle'); await page.waitForTimeout(500);
-check('session restored after reopening (still on reader)', page.url().includes('/read/story-unsent-page/2') && !(await has('Log in')));
-await go('/library');
-check('bookmark restored from account', await has('The Unsent Page'));
-await go('/story/story-unsent-page');
-check('continue reading restores chapter 2', await has('Continue reading · Chapter 2'));
-
-console.log('Logout, isolation, account change');
-await go('/profile');
-check('profile shows account email and sync note', (await has('alice@example.com')) && (await has('sync to your account')));
-check('account mode hides demo account switcher & marks enquiries demo-only', !(await has('Demo controls')) && (await has('Writer & filmmaker demo')));
-await page.getByRole('button', { name: 'Log out', exact: true }).click();
-await page.getByRole('dialog').getByRole('button', { name: 'Log out' }).click();
-await page.waitForURL('**/auth');
-check('logout returns to auth', await has('Log in'));
-await go('/library');
-check('after logout private data is not reachable', page.url().endsWith('/auth') && !(await has('The Unsent Page')));
-check('no auth token left in storage', !(await ls('book-reading-auth')));
-// second user
-await page.getByRole('tab', { name: 'Create account' }).click();
-await field('Your name', 'Bob'); await field('Email', 'bob@example.com'); await field('Password', 'another-pass-1');
-await page.getByRole('button', { name: 'Create account', exact: true }).click();
-await page.waitForTimeout(300);
-await go(`/auth/callback?code=${verify('bob@example.com')}`);
-await page.waitForURL('**/welcome');
-check('bob starts with a fresh onboarding, not alice’s prefs', await has('Hello Bob'));
-await page.getByRole('button', { name: 'Get started' }).click(); await page.getByRole('button', { name: 'Skip intro' }).click();
-await page.getByRole('button', { name: 'Mystery' }).click(); await page.getByRole('button', { name: 'Hindi' }).click();
-await page.getByRole('button', { name: 'Save and continue' }).click(); await page.waitForURL('**/discover');
-await go('/library');
-check('bob sees none of alice’s bookmarks/progress', !(await has('The Unsent Page')) && (await has('Nothing saved yet')));
-await go('/profile');
-await page.getByRole('button', { name: 'Log out', exact: true }).click();
-await page.getByRole('dialog').getByRole('button', { name: 'Log out' }).click();
-await page.waitForURL('**/auth');
 await login('alice@example.com', 'correct-horse-9');
-await go('/library');
-check('alice’s data is back after logging in again', await has('The Unsent Page'));
-
-console.log('Password reset');
-await go('/profile');
-await page.getByRole('button', { name: 'Log out', exact: true }).click();
-await page.getByRole('dialog').getByRole('button', { name: 'Log out' }).click();
-await page.waitForURL('**/auth');
-await page.getByRole('link', { name: 'Forgot password?' }).click();
-await page.getByRole('button', { name: 'Send reset link' }).click();
-check('reset needs a valid email', await has('Enter your email address.'));
-await field('Email', 'alice@example.com');
-await page.getByRole('button', { name: 'Send reset link' }).click();
-await page.waitForTimeout(300);
-check('reset confirmation is non-revealing', await has('If an account exists'));
-await go('/auth/recovery?code=rec-' + users.get('alice@example.com').id);
-await page.waitForURL('**/auth/reset');
-await field('New password', 'brand-new-pass-7'); await field('Confirm password', 'mismatch-pass-7');
-await page.getByRole('button', { name: 'Update password' }).click();
-check('reset confirms matching passwords', await has('Passwords don’t match.'));
-await field('Confirm password', 'brand-new-pass-7');
-await page.getByRole('button', { name: 'Update password' }).click();
-await page.waitForTimeout(500);
-check('password updated, signed in', users.get('alice@example.com').password === 'brand-new-pass-7' && !page.url().includes('/auth'));
-await go('/profile');
-await page.getByRole('button', { name: 'Log out', exact: true }).click();
-await page.getByRole('dialog').getByRole('button', { name: 'Log out' }).click();
-await page.waitForURL('**/auth');
-await login('alice@example.com', 'brand-new-pass-7');
-check('login works with the new password', !page.url().includes('/auth'));
-
-console.log('Callback edge cases');
-await go('/profile');
-await page.getByRole('button', { name: 'Log out', exact: true }).click(); await page.getByRole('dialog').getByRole('button', { name: 'Log out' }).click(); await page.waitForURL('**/auth');
-await go('/auth/callback?code=unknown-code');
-check('callback without a valid session still tells user the email is confirmed', await has('Email confirmed'));
-await go('/auth/callback?error_description=Email+link+is+invalid+or+has+expired');
-check('expired link shows a clear error', await has('invalid or has expired'));
-await go('/auth/recovery?code=bad');
-check('unusable reset link offers a new request', (await has('can’t be used here')) && (await page.getByRole('link', { name: 'Request a new link' }).count()) === 1);
-
-console.log('Demo mode stays separate');
-await go('/auth');
-await page.getByRole('button', { name: 'Continue in demo mode' }).click();
-await page.waitForURL('**/welcome');
-await page.waitForTimeout(300);
-check('demo opens a fresh local demo reader (not alice)', (await has('Hello Riya')) && (await has('demo mode')));
-const demoKey = await ls('stories-app-prototype');
-check('demo data stored under its own key, no account rows', !demoKey || !demoKey.includes('alice@example.com'));
-await page.getByRole('button', { name: 'Get started' }).click(); await page.getByRole('button', { name: 'Skip intro' }).click();
-await page.getByRole('button', { name: 'Drama' }).click(); await page.getByRole('button', { name: 'English' }).click();
-await page.getByRole('button', { name: 'Save and continue' }).click(); await page.waitForURL('**/discover');
-await go('/profile/demo');
-await page.getByRole('button', { name: /Mira Sen/ }).first().click(); await page.waitForTimeout(200);
-await go('/enquiries');
-check('writer enquiries are visibly marked Demo', (await page.locator('.demo-pill').count()) === 1);
-await go('/profile');
-check('profile states demo mode + offers real login', (await has('Demo mode.')) && (await has('Log in or create an account')));
-const before = tables.bookmarks.length;
-await go('/profile/demo'); await page.getByRole('button', { name: /Riya Shah/ }).first().click(); await page.waitForTimeout(200);
 await go('/discover');
 await page.getByRole('button', { name: 'Save The Unsent Page' }).first().click();
-await page.waitForTimeout(300);
-check('demo bookmarks never reach the backend', tables.bookmarks.length === before);
-await go('/profile');
-await page.getByRole('button', { name: /Log in or create an account/ }).click();
-await page.waitForTimeout(400);
-check('leaving demo returns to the real-account gate', page.url().includes('/auth') || (await has('Log in')) || (await has('alice@example.com')) || page.url().includes('/discover'));
+await wait(300);
+check('bookmark stored for alice', tables.bookmarks.length === 1);
+await page.reload(); await page.waitForLoadState('networkidle'); await wait(400);
+check('session restored after reopening', page.url().includes('/discover') && !(await has('Log in')));
+await go('/library');
+check('bookmark restored', await has('The Unsent Page'));
+await logout();
+check('logout clears private data and token', !(await page.evaluate(() => localStorage.getItem('book-reading-auth'))) && !(await has('The Unsent Page')));
+
+console.log('Forgot password (recovery OTP)');
+await go('/auth/forgot');
+await field('Email', 'nobody@example.com');
+await btn('Send reset code').click();
+await page.waitForURL('**/auth/forgot/code');
+const ackUnknown = (await page.locator('p.t-meta').first().innerText()).replace('nobody@example.com', 'X');
+await go('/auth/forgot');
+await field('Email', 'alice@example.com');
+await btn('Send reset code').click();
+await page.waitForURL('**/auth/forgot/code');
+const ackKnown = (await page.locator('p.t-meta').first().innerText()).replace('alice@example.com', 'X');
+check('same acknowledgement for unknown and registered emails', ackUnknown === ackKnown && ackKnown.includes('If an account exists'), `${ackUnknown} | ${ackKnown}`);
+const r1 = latest('alice@example.com', 'recovery').token;
+await otpBox().fill(wrongCode(r1));
+await wait(400);
+check('wrong reset code rejected', await has('incorrect, expired or already used'));
+latest('alice@example.com', 'recovery').expired = true;
+await otpBox().fill(r1);
+await wait(400);
+check('expired reset code rejected', await has('incorrect, expired or already used') && !page.url().includes('/auth/reset'));
+await wait(6600);
+await btn('Resend code').click();
+await wait(500);
+const r2 = latest('alice@example.com', 'recovery').token;
+await otpBox().fill(r2);
+await page.waitForURL('**/auth/reset');
+check('valid reset code opens New password (not Discover)', (await has('New password')) && (await has('Confirm password')));
+await page.reload(); await page.waitForLoadState('networkidle'); await wait(400);
+check('reload keeps the user on New password', page.url().includes('/auth/reset'));
+await go('/discover');
+check('cannot reach Discover mid-recovery', page.url().includes('/auth/reset'));
+await go('/library');
+check('cannot reach Library mid-recovery', page.url().includes('/auth/reset'));
+await field('New password', 'brand-new-pass-7'); await field('Confirm password', 'mismatch-pass-7');
+await btn('Save new password').click();
+check('mismatched passwords flagged', await has('Passwords don’t match.'));
+await field('New password', 'correct-horse-9'); await field('Confirm password', 'correct-horse-9');
+await btn('Save new password').click();
+await wait(500);
+check('reusing the current password is rejected visibly', await has('different from your current one'));
+await field('New password', 'brand-new-pass-7'); await field('Confirm password', 'brand-new-pass-7');
+await btn('Save new password').click();
+await page.waitForURL('**/auth');
+check('after saving, returns to Login with confirmation', (await has('Password updated')) && (await page.getByLabel('Email', { exact: true }).inputValue()) === 'alice@example.com');
+check('user is signed out after reset', !(await page.evaluate(() => localStorage.getItem('book-reading-auth'))));
+await field('Password', 'correct-horse-9'); await btn('Log in').click(); await wait(500);
+check('old password no longer works', await has('Email or password is incorrect.'));
+await field('Password', 'brand-new-pass-7'); await btn('Log in').click(); await wait(600);
+check('new password works', !page.url().includes('/auth'));
+await logout();
+await wait(6200);
+await go('/auth/forgot'); await field('Email', 'alice@example.com'); await btn('Send reset code').click(); await page.waitForURL('**/auth/forgot/code');
+await otpBox().fill(r2);
+await wait(400);
+check('already-used reset code is rejected', await has('incorrect, expired or already used'));
+
+console.log('Demo stays separate');
+await go('/auth');
+await btn('Continue in demo mode').click();
+await page.waitForURL('**/welcome'); await wait(300);
+check('demo opens sample data, not an account', (await has('Your next story')) && (await has('Demo controls')));
+const bm = tables.bookmarks.length;
+await finishOnboarding();
+await page.getByRole('button', { name: 'Save The Unsent Page' }).first().click(); await wait(300);
+check('demo bookmarks never reach the backend', tables.bookmarks.length === bm);
+
+console.log('Logs');
+const secrets = ['correct-horse-9', 'brand-new-pass-7', 'another-pass-1', c1, c2, r1, r2, bobCode];
+check('no passwords or OTPs in console output', !logs.some((l) => secrets.some((s) => l.includes(s))));
+check('no uncaught page errors', errors.length === 0, errors.slice(0, 2).join(' | '));
 
 console.log(`\nResult: ${pass} passed, ${failed} failed`);
-if (errors.length) console.log('Page errors:', errors.slice(0, 4));
 await browser.close();
 process.exit(failed ? 1 : 0);

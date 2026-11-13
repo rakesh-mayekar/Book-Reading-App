@@ -1,94 +1,154 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { BookOpen, Clapperboard, PenLine, Sparkles } from 'lucide-react';
-import { Button, Chip, Ico } from '../components/ui';
+import { art, genreIcon, ui } from '../assets/figma';
+import { Chip } from '../components/ui';
 import { GENRES, LANGUAGES } from '../domain/types';
+import { setBars } from '../native/bars';
 import { actions, useMode } from '../store/store';
 import { useMe } from './common';
 
-export function PrefsPicker({ genres, languages, setGenres, setLanguages, dark }: { genres: string[]; languages: string[]; setGenres: (g: string[]) => void; setLanguages: (l: string[]) => void; dark?: boolean }) {
+/** Chip-style picker, still used by Profile → Reading preferences. */
+export function PrefsPicker({ genres, languages, setGenres, setLanguages }: { genres: string[]; languages: string[]; setGenres: (g: string[]) => void; setLanguages: (l: string[]) => void }) {
   const toggle = (arr: string[], v: string) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
   return (
     <div className="stack">
       <fieldset>
-        <legend className="t-h3" style={{ marginBottom: 8 }}>Genres you enjoy <span className={dark ? 't-help' : 'muted'}>(choose at least one)</span></legend>
+        <legend className="t-h3" style={{ marginBottom: 8 }}>Genres you enjoy <span className="muted">(choose at least one)</span></legend>
         <div className="chips">{GENRES.map((g) => <Chip key={g} selected={genres.includes(g)} onClick={() => setGenres(toggle(genres, g))}>{g}</Chip>)}</div>
       </fieldset>
       <fieldset>
-        <legend className="t-h3" style={{ marginBottom: 8 }}>Reading languages <span className={dark ? 't-help' : 'muted'}>(choose at least one)</span></legend>
+        <legend className="t-h3" style={{ marginBottom: 8 }}>Reading languages <span className="muted">(choose at least one)</span></legend>
         <div className="chips">{LANGUAGES.map((g) => <Chip key={g} selected={languages.includes(g)} onClick={() => setLanguages(toggle(languages, g))}>{g}</Chip>)}</div>
       </fieldset>
     </div>
   );
 }
 
-const INTRO = [
-  { icon: BookOpen, title: 'Read stories for free', text: 'Browse original stories across genres and languages. Every story is free to read, with your place saved as you go.' },
-  { icon: PenLine, title: 'Write and publish', text: 'Writers draft chapters, preview them like a reader, and publish when ready, keeping drafts separate from what readers see.' },
-  { icon: Clapperboard, title: 'Discover adaptations', text: 'Filmmakers can contact writers who are open to adaptation enquiries. Acceptance only opens a conversation.' },
-];
+const SLIDES = [
+  { key: 'read', eyebrow: 'READ ORIGINAL STORIES', title: ['Your next story', 'starts here.'], body: ['Read original stories and discover', 'voices worth following.'], cta: 'Next', art: art.read },
+  { key: 'write', eyebrow: 'WRITE YOUR NEXT CHAPTER', title: ['Give your story', 'a world.'], body: ['Publish your stories, chapter by chapter,', 'and connect with readers.'], cta: 'Next', art: art.write },
+  { key: 'adapt', eyebrow: 'FROM PAGE TO SCREEN', title: ['Some stories', 'belong on screen.'], body: ['Discover stories open to adaptation and', 'connect directly with their writers.'], cta: 'Explore stories', art: art.adapt },
+] as const;
 
+const LANGUAGE_META: Record<string, { script: string; native: string; devanagari?: boolean }> = {
+  English: { script: 'Aa', native: 'English' },
+  Hindi: { script: 'अ', native: 'हिन्दी', devanagari: true },
+  Marathi: { script: 'म', native: 'मराठी', devanagari: true },
+};
+
+const lines = (a: readonly string[]) => a.map((l, i) => <span key={i}>{l}{i < a.length - 1 && <br />}</span>);
+
+function PrefStep({ step, name, title, sub, onBack, onSkip, helper, cta, canContinue, onContinue, children, note }: {
+  step: 1 | 2; name: string; title: readonly string[]; sub: readonly string[]; onBack: () => void; onSkip: () => void; helper: string; cta: string; canContinue: boolean; onContinue: () => void; children: React.ReactNode; note?: React.ReactNode;
+}) {
+  return (
+    <div className="page pref-page">
+      <div className="pref-nav">
+        <button className="pref-back" aria-label="Back" onClick={onBack}><img src={ui.back} alt="" width={44} height={44} /></button>
+        <button className="pref-skip" onClick={onSkip}>Skip</button>
+      </div>
+      <div className="pref-progress"><span>STEP {step} OF 2</span><span>{name}</span></div>
+      <div className="pref-track" role="progressbar" aria-valuemin={0} aria-valuemax={2} aria-valuenow={step}><i style={{ width: step === 1 ? '48.2%' : '100%' }} /></div>
+      <div className="pref-intro">
+        <h1>{lines(title)}</h1>
+        <p>{lines(sub)}</p>
+      </div>
+      <div className="pref-list">{children}{note}</div>
+      <div className="pref-foot">
+        <p className="pref-helper" aria-live="polite">{helper}</p>
+        <button className="onb-btn dark" disabled={!canContinue} onClick={onContinue}>
+          <span>{cta}</span><img src={ui.arrowLight} width={18} height={18} alt="" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Figma 1.2 (Read / Write / Adapt), 1.3 (genre) and 1.4 (language). */
 export function Onboarding() {
-  const { id, name } = useMe();
+  const { id } = useMe();
   const mode = useMode();
   const navigate = useNavigate();
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(0); // 0-2 slides, 3 genre, 4 language
   const [genres, setGenres] = useState<string[]>([]);
   const [languages, setLanguages] = useState<string[]>([]);
-  const last = INTRO.length + 1;
-  const valid = genres.length > 0 && languages.length > 0;
-  return (
-    <div className="page onboard">
-      <main className="scroll" style={{ display: 'flex', flexDirection: 'column' }}>
-        <div className="step-anim" key={step} style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: step === last ? 'flex-start' : 'center', gap: 20, paddingTop: step === last ? 24 : 0 }}>
-          {step === 0 && (
-            <>
-              <div style={{ width: 72, height: 72, borderRadius: '50%', border: '1.5px solid rgba(255,255,255,.5)', display: 'grid', placeItems: 'center' }}><Ico i={Sparkles} size={32} /></div>
-              <h1 style={{ font: '600 44px/1.1 var(--font-serif)' }}>Stories</h1>
-              <p style={{ font: '400 20px/1.5 var(--font-serif)', opacity: .9 }}>Read freely. Write boldly. Let a good story find its way to the screen.</p>
-              <p className="t-meta">Hello {name.split(' ')[0]}{mode === 'demo' ? ' — this is demo mode with sample data on this device.' : '.'}</p>
-            </>
-          )}
-          {step > 0 && step < last && (
-            <>
-              <div className="dots" aria-label={`Step ${step} of ${INTRO.length}`}>{INTRO.map((_, i) => <i key={i} className={i === step - 1 ? 'on' : ''} />)}</div>
-              <div style={{ width: 64, height: 64, borderRadius: 20, background: 'rgba(255,255,255,.12)', display: 'grid', placeItems: 'center' }}><Ico i={INTRO[step - 1].icon} size={30} /></div>
-              <h1 style={{ font: '600 30px/1.2 var(--font-serif)' }}>{INTRO[step - 1].title}</h1>
-              <p style={{ fontSize: 17, lineHeight: 1.6, opacity: .9 }}>{INTRO[step - 1].text}</p>
-            </>
-          )}
-          {step === last && (
-            <>
-              <h1 style={{ font: '600 28px/1.2 var(--font-serif)' }}>Tell us what you like</h1>
-              <p className="t-meta">We use this to shape your Discover page. You can change it later in your profile.</p>
-              <PrefsPicker dark genres={genres} languages={languages} setGenres={setGenres} setLanguages={setLanguages} />
-            </>
-          )}
+  const toggle = (arr: string[], v: string) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
+  useEffect(() => setBars({ darkBackground: step < 3 }), [step]);
+  useEffect(() => () => setBars({ darkBackground: false }), []);
+
+  const finish = () => {
+    actions.savePrefs(id, { genres, languages, onboarded: true });
+    navigate('/discover', { replace: true });
+  };
+
+  if (step === 3)
+    return (
+      <PrefStep step={1} name="YOUR TASTE" title={['What draws you', 'into a story?']} sub={['Pick your favourites. You can change', 'these anytime.']}
+        onBack={() => setStep(2)} onSkip={() => setStep(4)}
+        helper={genres.length ? `${genres.length} ${genres.length === 1 ? 'genre' : 'genres'} selected` : 'Select at least one genre'}
+        cta="Continue" canContinue={genres.length > 0} onContinue={() => setStep(4)}>
+        <div className="genre-grid">
+          {GENRES.map((g) => {
+            const on = genres.includes(g);
+            return (
+              <button key={g} className={`gcard ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => setGenres(toggle(genres, g))}>
+                <span className="gcard-top">
+                  <span className="gicon" style={{ ['--icon' as string]: `url(${genreIcon[g]})` }} aria-hidden="true" />
+                  <img src={on ? ui.checkOn : ui.checkOff} width={16} height={16} alt="" />
+                </span>
+                <span className="gname">{g}</span>
+              </button>
+            );
+          })}
         </div>
-      </main>
-      <div className="footer-bar" style={{ background: 'var(--dark)', borderColor: 'rgba(255,255,255,.15)' }}>
-        {step < last ? (
-          <>
-            <Button onClick={() => setStep(step + 1)}>{step === 0 ? 'Get started' : 'Continue'}</Button>
-            <div className="row between">
-              {step > 0 ? <button className="btn-link" onClick={() => setStep(last)}>Skip intro</button> : <span />}
-              {mode === 'demo' ? <Link className="btn-link t-meta" to="/profile/demo">Demo controls</Link> : <span />}
-            </div>
-          </>
-        ) : (
-          <>
-            <Button
-              disabled={!valid}
-              onClick={() => {
-                actions.savePrefs(id, { genres, languages, onboarded: true });
-                navigate('/discover', { replace: true });
-              }}
-            >
-              Save and continue
-            </Button>
-            {!valid && <p className="t-help" style={{ textAlign: 'center' }}>Choose at least one genre and one language to continue.</p>}
-          </>
-        )}
+      </PrefStep>
+    );
+
+  if (step === 4)
+    return (
+      <PrefStep step={2} name="YOUR LANGUAGES" title={['Which languages', 'do you read?']} sub={['Choose the languages you enjoy.', 'You can pick more than one.']}
+        onBack={() => setStep(3)} onSkip={finish}
+        helper={languages.length ? `${languages.length} ${languages.length === 1 ? 'language' : 'languages'} selected` : 'Select at least one language'}
+        cta="Explore stories" canContinue={languages.length > 0} onContinue={finish}
+        note={<div className="lang-note"><p>Your stories, in your languages.</p><p>This changes story recommendations,<br />not the app language.</p></div>}>
+        <div className="lang-list">
+          {LANGUAGES.map((l) => {
+            const on = languages.includes(l);
+            const m = LANGUAGE_META[l];
+            return (
+              <button key={l} className={`lcard ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => setLanguages(toggle(languages, l))}>
+                <span className={`lscript ${m.devanagari ? 'deva' : ''}`} aria-hidden="true">{m.script}</span>
+                <span className="llabels"><span className="lname">{l}</span><span className={`lnative ${m.devanagari ? 'deva' : ''}`}>{m.native}</span></span>
+                <img src={on ? ui.langOn : ui.langOff} width={18} height={18} alt="" />
+              </button>
+            );
+          })}
+        </div>
+      </PrefStep>
+    );
+
+  const s = SLIDES[step];
+  return (
+    <div className="page onb-slide">
+      {SLIDES.map((x, i) => <img key={x.key} className={`onb-art ${i === step ? 'on' : ''}`} src={x.art} alt="" />)}
+      <div className="onb-shade" />
+      <header className="onb-top">
+        <span className="onb-brand">Stories</span>
+        <button className="onb-skip" onClick={() => setStep(3)}>Skip</button>
+      </header>
+      <div className="onb-content" key={s.key}>
+        <p className="onb-eyebrow">{s.eyebrow}</p>
+        <h1 className="onb-title">{lines(s.title)}</h1>
+        <p className="onb-body">{lines(s.body)}</p>
+        <button className="onb-btn light" onClick={() => setStep(step + 1)}>
+          <span>{s.cta}</span><img src={ui.arrowDark} width={18} height={18} alt="" />
+        </button>
+        <div className="onb-dots-row">
+          <div className="onb-dots" role="group" aria-label="Introduction steps">
+            {SLIDES.map((x, i) => <button key={x.key} className={i === step ? 'on' : ''} aria-label={`Go to step ${i + 1} of ${SLIDES.length}`} aria-current={i === step ? 'step' : undefined} onClick={() => setStep(i)} />)}
+          </div>
+          {mode === 'demo' && <Link className="onb-demo" to="/profile/demo">Demo controls</Link>}
+        </div>
       </div>
     </div>
   );
