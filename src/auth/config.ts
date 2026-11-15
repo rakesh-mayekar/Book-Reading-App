@@ -12,7 +12,8 @@ export const supabase: SupabaseClient | null = isSupabaseConfigured
       auth: {
         persistSession: true, // restores the session after the app/site is reopened
         autoRefreshToken: true,
-        detectSessionInUrl: false, // email OTP codes are typed in; no URL callbacks are used
+        detectSessionInUrl: false, // codes are typed in; the Google/Facebook callback is exchanged explicitly (AuthCallback)
+        flowType: 'pkce',
         storageKey: 'book-reading-auth',
       },
     })

@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from 'react';
 import { createSeed, DB_VERSION, STORAGE_KEY } from '../domain/seed';
 import * as R from '../domain/rules';
-import type { Chapter, DB, EnquiryDraft, Filters, FilmmakerProfile, Story, UserPreferences, WriterProfile, EnquiryStatus } from '../domain/types';
+import type { Chapter, DB, EnquiryDraft, Filters, FilmmakerProfile, Story, UserPreferences, WriterProfile, EnquiryStatus, RoleKind } from '../domain/types';
+import type { RoleDecision } from '../domain/rules';
 
 import { addBookmark, removeBookmark, updateProfile, upsertProgress } from '../auth/cloud';
 import { isSupabaseConfigured } from '../auth/config';
@@ -234,6 +235,28 @@ export const actions = {
   },
   saveFilmmakerProfile(p: FilmmakerProfile) {
     update((db) => ({ ...db, filmmakers: { ...db.filmmakers, [p.accountId]: p } }));
+  },
+  /** Submit (or resubmit) a Writer / Filmmaker application. Demo only: approval is simulated on this device. */
+  submitRoleApp(accountId: string, kind: RoleKind, profile: WriterProfile | FilmmakerProfile): { ok: true } | { ok: false; message: string } {
+    const db = cur();
+    if (!R.canSubmitRole(db, accountId, kind)) return { ok: false, message: 'You already have an application in review or approved.' };
+    update((d) => ({
+      ...d,
+      writers: kind === 'writer' ? { ...d.writers, [accountId]: profile as WriterProfile } : d.writers,
+      filmmakers: kind === 'filmmaker' ? { ...d.filmmakers, [accountId]: { ...(profile as FilmmakerProfile), complete: true } } : d.filmmakers,
+      roleApps: { ...d.roleApps, [accountId]: { ...d.roleApps?.[accountId], [kind]: { state: 'pending', submittedAt: now() } } },
+    }));
+    return { ok: true };
+  },
+  /** Owner decision (demo tool). Approving one role never changes the other. Changes/rejection need feedback. */
+  decideRoleApp(accountId: string, kind: RoleKind, decision: RoleDecision, feedback = ''): { ok: true } | { ok: false; message: string } {
+    const db = cur();
+    if (R.roleState(db, accountId, kind) !== 'pending') return { ok: false, message: 'This application is no longer pending.' };
+    const bad = R.validateDecision(decision, feedback);
+    if (bad) return { ok: false, message: bad };
+    const state = decision === 'approve' ? 'approved' : decision === 'request_changes' ? 'changes_requested' : 'rejected';
+    update((d) => ({ ...d, roleApps: { ...d.roleApps, [accountId]: { ...d.roleApps?.[accountId], [kind]: { ...d.roleApps?.[accountId]?.[kind], state, feedback: decision === 'approve' ? undefined : feedback.trim(), decidedAt: now() } } } }));
+    return { ok: true };
   },
 
   /* writer stories */

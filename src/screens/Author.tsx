@@ -8,7 +8,7 @@ import { NotFoundState, useMe } from './common';
 
 export function Author() {
   const { id: wid = '' } = useParams();
-  const { db, id, role } = useMe();
+  const { db, id, isFilmmaker } = useMe();
   const w = db.writers[wid];
   if (!w) return <NotFoundState what="writer" to="/discover" />;
   const stories = publishedStories(db).filter((s) => s.writerId === wid);
@@ -26,7 +26,7 @@ export function Author() {
         {wid === id && <LinkButton variant="secondary" to="/profile/writer">Edit my profile</LinkButton>}
         <h2 className="fm-h2" id="st-h">Published stories</h2>
         {stories.length ? stories.map((s) => <StoryStrip key={s.id} story={s} writer={w.name} to={`/story/${s.id}`} />) : <EmptyState icon={BookOpen} title="No published stories" text="This writer hasn’t published anything yet." />}
-        {role === 'filmmaker' && open.map((s) => {
+        {isFilmmaker && open.map((s) => {
           const g = enquiryGate(db, id, s.id);
           return (
             <div className="fm-box" key={s.id}>

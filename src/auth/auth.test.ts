@@ -78,3 +78,27 @@ describe('buildAccountDb', () => {
     expect(db.progress[0]).toMatchObject({ chapterIndex: 1, scroll: 0.4, storyId: 'story-unsent-page' });
   });
 });
+
+import { COUNTRIES, countryByCode, maskTarget, nationalDigits, toE164, validatePhone } from './phone';
+describe('phone helpers', () => {
+  const IN = countryByCode('IN');
+  it('validates by country', () => {
+    expect(validatePhone('', IN)).toBe('Enter your phone number.');
+    expect(validatePhone('12345', IN)).toMatch(/valid India/);
+    expect(validatePhone('5876543210', IN)).toMatch(/valid India/); // India mobiles start 6-9
+    expect(validatePhone('98765 43210', IN)).toBe('');
+    expect(validatePhone('1234567', countryByCode('SG'))).not.toBe('');
+    expect(validatePhone('12345678', countryByCode('SG'))).toBe('');
+  });
+  it('builds E.164 and drops a UK trunk zero', () => {
+    expect(toE164('98765 43210', IN)).toBe('+919876543210');
+    expect(toE164('07911 123456', countryByCode('GB'))).toBe('+447911123456');
+    expect(nationalDigits('９８７６５４３２１０', IN)).toBe('9876543210');
+  });
+  it('masks identifiers for display', () => {
+    expect(maskTarget('phone', '+919876543210')).toBe('+91 ······ 3210');
+    expect(maskTarget('phone', '+15551234567')).toBe('+1 ······ 4567');
+    expect(maskTarget('email', 'erin@example.com')).toBe('e•••@example.com');
+    expect(COUNTRIES.length).toBe(4);
+  });
+});

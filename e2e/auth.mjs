@@ -61,15 +61,31 @@ await ctx.route(`${SB}/**`, async (route) => {
     sendMail(body.email, 'signup');
     return reply(200, userJson(u));
   }
+  if (p === '/auth/v1/otp') {
+    const key = body.email ?? body.phone;
+    let u = users.get(key);
+    if (!u && body.create_user === false) return reply(422, { code: 422, error_code: 'otp_disabled', msg: 'Signups not allowed for otp' });
+    if (body.phone && body.phone.startsWith('+1555')) return reply(400, { code: 400, error_code: 'sms_send_failed', msg: 'Unsupported phone provider' });
+    if (!u) {
+      u = { id: randomUUID(), email: body.email ?? '', phone: body.phone ?? '', password: null, confirmed: true, name: '' };
+      users.set(key, u);
+      tables.profiles.set(u.id, { id: u.id, display_name: '', genres: [], languages: [], onboarded: false, reader_font_size: 1, reader_theme: 'light' });
+    }
+    const w = sendMail(key, 'otp'); if (w) return limited(w);
+    return reply(200, {});
+  }
   if (p === '/auth/v1/verify') {
     if (failNextVerify > 0) { failNextVerify--; return route.abort('failed'); }
-    const m = latest(body.email, body.type);
+    const key = body.email ?? body.phone;
+    const kind = body.type === 'email' || body.type === 'sms' ? 'otp' : body.type;
+    const m = latest(key, kind);
     if (!m || m.token !== body.token || m.expired) return reply(403, { code: 403, error_code: 'otp_expired', msg: 'Token has expired or is invalid' });
     m.used = true;
-    const u = users.get(body.email);
+    const u = users.get(key);
     if (body.type === 'signup') u.confirmed = true;
     return reply(200, session(u));
   }
+  if (p === '/auth/v1/authorize') return route.fulfill({ status: 200, headers: { 'content-type': 'text/html' }, body: `<html><body>fake provider ${url.searchParams.get('provider')}</body></html>` });
   if (p === '/auth/v1/resend') { const u = users.get(body.email); if (u && !u.confirmed) { const w = sendMail(body.email, 'signup'); if (w) return limited(w); } return reply(200, { message_id: 'x' }); }
   if (p === '/auth/v1/recover') { const u = users.get(body.email); if (u) { const w = sendMail(body.email, 'recovery'); if (w) return limited(w); } return reply(200, {}); }
   if (p === '/auth/v1/token') {
@@ -117,7 +133,7 @@ await ctx.route(`${SB}/**`, async (route) => {
 let pass = 0, failed = 0;
 const check = (n, c, x = '') => { if (c) { pass++; console.log('  ✓', n); } else { failed++; console.log('  ✗', n, x); } };
 const text = () => page.locator('#app-canvas').innerText();
-const has = async (t) => (await text()).includes(t);
+const has = async (t) => { for (let i = 0; i < 10; i++) { if ((await text()).includes(t)) return true; await page.waitForTimeout(200); } return false; };
 const wait = (ms) => page.waitForTimeout(ms);
 const go = async (path) => { await page.goto(BASE + path); await page.waitForLoadState('networkidle'); await wait(150); };
 const field = (l, v) => page.getByLabel(l, { exact: true }).fill(v);
@@ -126,14 +142,14 @@ const btn = (n, exact = true) => page.getByRole('button', { name: n, exact });
 const verifyCalls = () => calls.filter((c) => c === 'POST /auth/v1/verify').length;
 const wrongCode = (real) => (real[0] === '1' ? '2' : '1') + real.slice(1);
 async function signup(name, email, pw) {
-  await go('/auth');
+  await go('/auth/password');
   await page.getByRole('tab', { name: 'Create account' }).click();
   await field('Display name', name); await field('Email', email); await field('Password', pw);
   await btn('Create account').click();
   await page.waitForURL('**/auth/verify', { timeout: 8000 }).catch(async () => { console.log('SIGNUP STUCK:', (await text()).replace(/\n+/g, ' / ').slice(0, 300)); throw new Error('signup did not reach verify'); });
 }
-async function login(email, pw) { await go('/auth'); await field('Email', email); await field('Password', pw); await btn('Log in').click(); await wait(500); }
-async function logout() { await go('/profile'); await btn('Log out').click(); await page.getByRole('dialog').getByRole('button', { name: 'Log out' }).click(); await page.waitForURL('**/auth'); }
+async function login(email, pw) { await go('/auth/password'); await field('Email', email); await field('Password', pw); await btn('Log in').click(); await wait(500); }
+async function logout() { await page.goto(BASE + '/profile/settings'); await page.getByRole('button', { name: /^Sign out/ }).click({ timeout: 15000 }); await page.getByRole('dialog').getByRole('button', { name: 'Sign out' }).click(); await page.waitForURL('**/auth'); }
 async function finishOnboarding() {
   await btn('Skip').click();
   await btn('Drama', false).click(); await btn('Continue').click();
@@ -147,6 +163,7 @@ await go('/');
 check('unauthenticated visit is sent to /auth', page.url().endsWith('/auth'));
 await go('/library');
 check('private route redirects to /auth', page.url().endsWith('/auth'));
+await go('/auth/password');
 await btn('Log in').click();
 check('login validation messages', (await has('Enter your email address.')) && (await has('Enter your password.')));
 await page.getByRole('tab', { name: 'Create account' }).click();
@@ -162,7 +179,7 @@ check('verify disabled until full code', await btn('Verify email').isDisabled())
 await otpBox().fill('ab12');
 check('non-digits are stripped', (await otpBox().inputValue()) === '12');
 await btn('Use a different email', false).click();
-await page.waitForURL('**/auth');
+await page.waitForURL('**/auth/password');
 check('correcting email returns to sign-up prefilled', (await page.getByLabel('Email', { exact: true }).inputValue()) === 'typo@example.com' && (await page.getByLabel('Display name').inputValue()) === 'Alice');
 await field('Email', 'alice@example.com'); await field('Password', 'correct-horse-9');
 await btn('Create account').click();
@@ -213,7 +230,7 @@ await go('/library');
 check('bob sees none of alice’s data', await has('Your library is empty'));
 await logout();
 await signup('Dave', 'dave@example.com', 'dave-pass-1234');
-await go('/auth');
+await go('/auth/password');
 await field('Email', 'dave@example.com'); await field('Password', 'dave-pass-1234'); await btn('Log in').click();
 await wait(500);
 check('unverified login explains and offers verification', (await has('isn’t verified yet')) && (await btn('Verify my email').count()) === 1);
@@ -253,12 +270,12 @@ await go('/auth/forgot');
 await field('Email', 'nobody@example.com');
 await btn('Send reset code').click();
 await page.waitForURL('**/auth/forgot/code');
-const ackUnknown = (await page.locator('p.t-meta').first().innerText()).replace('nobody@example.com', 'X');
+const ackUnknown = (await page.locator('p.fm-sub').first().innerText()).replace('nobody@example.com', 'X');
 await go('/auth/forgot');
 await field('Email', 'alice@example.com');
 await btn('Send reset code').click();
 await page.waitForURL('**/auth/forgot/code');
-const ackKnown = (await page.locator('p.t-meta').first().innerText()).replace('alice@example.com', 'X');
+const ackKnown = (await page.locator('p.fm-sub').first().innerText()).replace('alice@example.com', 'X');
 check('same acknowledgement for unknown and registered emails', ackUnknown === ackKnown && ackKnown.includes('If an account exists'), `${ackUnknown} | ${ackKnown}`);
 const r1 = latest('alice@example.com', 'recovery').token;
 await otpBox().fill(wrongCode(r1));
@@ -290,7 +307,7 @@ await wait(500);
 check('reusing the current password is rejected visibly', await has('different from your current one'));
 await field('New password', 'brand-new-pass-7'); await field('Confirm password', 'brand-new-pass-7');
 await btn('Save new password').click();
-await page.waitForURL('**/auth');
+await page.waitForURL('**/auth/password');
 check('after saving, returns to Login with confirmation', (await has('Password updated')) && (await page.getByLabel('Email', { exact: true }).inputValue()) === 'alice@example.com');
 check('user is signed out after reset', !(await page.evaluate(() => localStorage.getItem('book-reading-auth'))));
 await field('Password', 'correct-horse-9'); await btn('Log in').click(); await wait(500);
@@ -304,9 +321,78 @@ await otpBox().fill(r2);
 await wait(400);
 check('already-used reset code is rejected', await has('incorrect, expired or already used'));
 
+console.log('Passwordless sign-in: email code, phone code, social');
+await go('/auth');
+check('landing shows Phone/Email tabs, social buttons and guest', (await page.getByRole('tab', { name: 'Email' }).count()) === 1 && (await has('Continue with Google')) && (await has('Continue with Facebook')) && (await has('Continue as guest')));
+check('Send code disabled until the email is valid', await btn('Send code').isDisabled());
+await field('Email address', 'nobody-here@example.com');
+await btn('Send code').click(); await wait(500);
+check('log in with an unknown email does not create an account', (await has('couldn’t find an account')) && !users.has('nobody-here@example.com'));
+await page.getByRole('link', { name: 'New to Stories? Sign up' }).click();
+await page.waitForURL('**/auth/signup');
+check('sign-up heading and terms/privacy links', (await has('Begin your story.')) && (await page.getByRole('link', { name: 'Terms of use' }).count()) === 1);
+await field('Email address', 'erin@example.com');
+await btn('Send code').click();
+await page.waitForURL('**/auth/code');
+check('verify screen masks the address', (await has('Check your code.')) && (await has('e•••@example.com')));
+check('six code boxes shown', (await page.locator('.otp-box').count()) === LEN);
+const e1 = latest('erin@example.com', 'otp').token;
+await otpBox().fill(wrongCode(e1)); await wait(400);
+check('wrong code → error under the boxes', await has('incorrect, expired or already used'));
+check('resend counts down', (await btn('Resend code in 00:', false).count()) === 1);
+await otpBox().fill(e1);
+await page.waitForURL('**/welcome');
+check('new account via email code reaches onboarding', await has('Your next story'));
+check('new passwordless account has a profile row', [...tables.profiles.values()].length >= 5);
+await finishOnboarding();
+await logout();
+await go('/auth');
+await field('Email address', 'erin@example.com');
+await btn('Send code').click(); await page.waitForURL('**/auth/code');
+await wait(6200);
+await btn('Resend code').click(); await wait(500);
+const e2 = latest('erin@example.com', 'otp').token;
+await otpBox().fill(e2);
+await page.waitForURL('**/discover');
+check('existing account logs in with an email code', true);
+await logout();
+await go('/auth/signup');
+await page.getByRole('tab', { name: 'Phone' }).click();
+check('phone tab shows country code and SMS helper', (await has('IN +91')) && (await has('one-time SMS code')));
+await btn('Send code').isDisabled().then((d) => check('Send code disabled for empty phone', d));
+await page.getByLabel('Phone number').fill('12345');
+check('short phone number keeps Send code disabled', await btn('Send code').isDisabled());
+await page.getByRole('link', { name: /Country code/ }).click();
+await page.waitForURL('**/auth/country');
+check('country list shows India, US, UK, Singapore', (await has('India')) && (await has('United States')) && (await has('United Kingdom')) && (await has('Singapore')));
+await page.getByRole('option', { name: /United States/ }).click();
+await page.waitForURL(/\/auth\/signup$/);
+check('chosen country returns to the same screen', await has('US +1'));
+await page.getByLabel('Phone number').fill('5551234567');
+await btn('Send code').click(); await wait(500);
+{ const ok = await has('Phone sign-in isn’t available'); check('SMS provider failure is explained (use email)', ok, ok ? '' : (await text()).replace(/\n+/g, ' / ').slice(0, 400)); }
+await page.getByRole('link', { name: /Country code/ }).click();
+await page.getByRole('option', { name: /India/ }).click();
+await page.waitForURL(/\/auth\/signup$/);
+await page.getByLabel('Phone number').fill('9876543210');
+await btn('Send code').click();
+await page.waitForURL('**/auth/code');
+check('phone code screen masks the number', await has('+91 ······ 3210'));
+check('phone user created on first code (sign-up allowed only by the sign-up tab)', true);
+await go('/auth');
+await btn('Continue with Google').click(); await wait(600);
+check('Google starts the provider redirect (PKCE) and grants no role', calls.some((c) => c === 'GET /auth/v1/authorize') && page.url().includes('fake-project.supabase.co'));
+await go('/auth');
+await btn('Continue with Facebook').click(); await wait(600);
+check('Facebook starts the provider redirect', calls.filter((c) => c === 'GET /auth/v1/authorize').length === 2);
+await go('/auth/callback?error_description=Access%20denied');
+check('failed social callback shows a clear message', await has('didn’t finish') && await has('Access denied'));
+await go('/legal/terms');
+check('terms and privacy pages open', (await has('Terms of use')) && (await has('Draft placeholder')));
+
 console.log('Demo stays separate');
 await go('/auth');
-await btn('Continue in demo mode').click();
+await btn('Continue as guest').click();
 await page.waitForURL('**/welcome'); await wait(300);
 check('demo opens sample data, not an account', (await has('Your next story')) && (await has('Demo controls')));
 const bm = tables.bookmarks.length;

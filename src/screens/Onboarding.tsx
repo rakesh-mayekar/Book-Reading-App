@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { art, genreIcon, ui } from '../assets/figma';
+import { art, genreIcon, painted, ui } from '../assets/figma';
 import { Chip } from '../components/ui';
 import { GENRES, LANGUAGES } from '../domain/types';
 import { setBars } from '../native/bars';
@@ -93,7 +93,7 @@ export function Onboarding() {
             return (
               <button key={g} className={`gcard ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => setGenres(toggle(genres, g))}>
                 <span className="gcard-top">
-                  <span className="gicon" style={{ ['--icon' as string]: `url(${genreIcon[g]})` }} aria-hidden="true" />
+                  <span className="gicon" style={{ ['--icon' as string]: `url("${genreIcon[g]}")` }} aria-hidden="true" />
                   <img src={on ? ui.checkOn : ui.checkOff} width={16} height={16} alt="" />
                 </span>
                 <span className="gname">{g}</span>
@@ -130,7 +130,7 @@ export function Onboarding() {
   const s = SLIDES[step];
   return (
     <div className="page onb-slide">
-      {SLIDES.map((x, i) => <img key={x.key} className={`onb-art ${i === step ? 'on' : ''}`} src={x.art} alt="" />)}
+      <img className="onb-cover" src={painted.unsent} alt="The Unsent Page by Mira Sen" />
       <div className="onb-shade" />
       <header className="onb-top">
         <span className="onb-brand">Stories</span>

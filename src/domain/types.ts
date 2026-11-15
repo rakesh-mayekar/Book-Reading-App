@@ -84,8 +84,15 @@ export interface SavedStory {
   savedAt: number;
 }
 
+/** Writer / Filmmaker are independent, owner-approved professional roles. Every account is a Reader. */
+export type RoleKind = 'writer' | 'filmmaker';
+export type RoleState = 'not_requested' | 'draft' | 'pending' | 'approved' | 'changes_requested' | 'rejected';
+export interface RoleApp { state: RoleState; feedback?: string; submittedAt?: number; decidedAt?: number }
+
 export interface UserPreferences {
   onboarded: boolean;
+  /** The "How will you use Stories?" step has been shown for this account. */
+  roleSetup?: boolean;
   genres: string[];
   languages: string[];
   fontSize: number; // 0..3
@@ -167,4 +174,6 @@ export interface DB {
   composer: Record<string, string>;
   filters: Record<string, Filters>;
   enquiryFilter: Record<string, '' | EnquiryStatus>;
+  /** Role applications per account. Missing = derived from the seeded demo roles (Mira = Writer, Kabir = Filmmaker). */
+  roleApps?: Record<string, Partial<Record<RoleKind, RoleApp>>>;
 }

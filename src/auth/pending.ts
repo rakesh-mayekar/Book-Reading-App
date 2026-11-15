@@ -1,6 +1,7 @@
 /** Remembers which email is mid-verification so a reload/Android back doesn't lose the screen. Never stores passwords or codes. */
-export type OtpPurpose = 'signup' | 'recovery';
-export interface PendingOtp { email: string; name?: string; purpose: OtpPurpose; resendAt: number }
+export type OtpPurpose = 'signup' | 'recovery' | 'code';
+/** `code` = passwordless sign-in/up by email or phone. `email` then holds the email address or the E.164 phone number. */
+export interface PendingOtp { email: string; name?: string; purpose: OtpPurpose; resendAt: number; channel?: 'email' | 'phone'; create?: boolean }
 const KEY = 'br-otp-pending';
 
 export function readPending(purpose?: OtpPurpose): PendingOtp | null {

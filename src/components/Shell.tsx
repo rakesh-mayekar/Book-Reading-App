@@ -4,7 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { IconButton } from './ui';
 import { nav } from '../assets/figma';
 import { useDB, useMode } from '../store/store';
-import { roleOf } from '../domain/rules';
+import { effectiveRole } from '../domain/rules';
 
 /* Toast */
 type T = { id: number; text: string };
@@ -24,9 +24,23 @@ function ToastHost() {
   return <div className="toast-host" role="status" aria-live="polite">{items.map((t) => <div key={t.id} className="toast">{t.text}</div>)}</div>;
 }
 
+function OfflineBar() {
+  const [online, setOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
+  if (online) return null;
+  return <div className="offline-bar" role="status">You’re offline. Your saved place and library stay on this device; syncing resumes when you reconnect.</div>;
+}
+
 export function MobileShell({ children }: { children: ReactNode }) {
   return (
     <div className="canvas" id="app-canvas">
+      <OfflineBar />
       {children}
       <ToastHost />
     </div>
@@ -53,7 +67,7 @@ function useTextEditing() {
 export function BottomNav() {
   const db = useDB();
   const editing = useTextEditing();
-  const role = roleOf(db.activeAccountId);
+  const role = effectiveRole(db, db.activeAccountId);
   const pending = db.enquiries.filter((e) => e.writerId === db.activeAccountId && e.status === 'pending').length;
   type Item = { to: string; label: string; icon: string; badge?: number };
   const home: Item = { to: '/discover', label: 'Discover', icon: nav.home };

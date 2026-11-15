@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
 import type { Session, User } from '@supabase/supabase-js';
 import { buildAccountDb, fetchAccountData, updateProfile } from './cloud';
 import { isSupabaseConfigured, OTP_RESEND_SECONDS, supabase } from './config';
@@ -10,6 +11,8 @@ import { enterAccount, flushCloud, leaveAccount } from '../store/store';
 
 /** 'recovery' = the user proved ownership of the email with a reset code and must now choose a new password. */
 export type AuthStatus = 'loading' | 'signedOut' | 'signedIn' | 'recovery' | 'error';
+export type CodeTarget = { channel: 'email' | 'phone'; value: string };
+export const OAUTH_NATIVE_REDIRECT = 'com.bookreading.prototype://auth/callback';
 export type AuthResult = { ok: true; needsVerification?: boolean } | ({ ok: false } & AuthFailure);
 
 interface AuthCtx {
@@ -24,6 +27,9 @@ interface AuthCtx {
   verifyRecoveryOtp: (email: string, code: string) => Promise<AuthResult>;
   completeRecovery: (password: string) => Promise<AuthResult>;
   cancelRecovery: () => Promise<void>;
+  sendCode: (target: CodeTarget, create: boolean) => Promise<AuthResult>;
+  verifyCode: (target: CodeTarget, code: string) => Promise<AuthResult>;
+  signInWithProvider: (provider: 'google' | 'facebook') => Promise<AuthResult>;
   signOut: () => Promise<void>;
   retry: () => void;
 }
@@ -143,6 +149,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           void supabase.auth.stopAutoRefresh();
         }
       }),
+      CapApp.addListener('appUrlOpen', ({ url }) => {
+        if (!supabase || !url.startsWith(OAUTH_NATIVE_REDIRECT)) return;
+        void Browser.close().catch(() => {});
+        const code = new URL(url).searchParams.get('code');
+        if (code) void supabase.auth.exchangeCodeForSession(code).catch(() => {});
+      }),
       CapApp.addListener('backButton', ({ canGoBack }) => {
         if (statusRef.current === 'recovery') return;
         if (canGoBack) window.history.back();
@@ -216,6 +228,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (supabase) await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
         setUser(null);
         setStatus('signedOut');
+      },
+      async sendCode(t, create) {
+        const options = { shouldCreateUser: create };
+        const { error: e } = t.channel === 'email' ? await sb().auth.signInWithOtp({ email: t.value.trim(), options }) : await sb().auth.signInWithOtp({ phone: t.value, options });
+        return e ? fail(e, 'send') : { ok: true };
+      },
+      async verifyCode(t, code) {
+        const { error: e } = t.channel === 'email' ? await sb().auth.verifyOtp({ email: t.value.trim(), token: code, type: 'email' }) : await sb().auth.verifyOtp({ phone: t.value, token: code, type: 'sms' });
+        return e ? fail(e, 'verify') : { ok: true };
+      },
+      async signInWithProvider(provider) {
+        // Social sign-in only authenticates the account. It never grants Writer/Filmmaker access.
+        const native = Capacitor.isNativePlatform();
+        const { data, error: e } = await sb().auth.signInWithOAuth({ provider, options: { redirectTo: native ? OAUTH_NATIVE_REDIRECT : `${window.location.origin}/auth/callback`, skipBrowserRedirect: native } });
+        if (e) return fail(e, 'login');
+        if (native && data.url) await Browser.open({ url: data.url });
+        return { ok: true };
       },
       async signOut() {
         await flushCloud();

@@ -3,7 +3,7 @@ import { useSaveStory } from '../components/SavePrompt';
 import { Link, Navigate } from 'react-router-dom';
 import { FileQuestion, ShieldAlert } from 'lucide-react';
 import { useDB } from '../store/store';
-import { accountName, roleOf, type PubStory } from '../domain/rules';
+import { accountName, effectiveRole, isApproved, roleState, type PubStory } from '../domain/rules';
 import type { Role } from '../domain/types';
 import { Page } from '../components/Shell';
 import { EmptyState, LinkButton } from '../components/ui';
@@ -16,7 +16,7 @@ import { Progress } from '../components/ui';
 export function useMe() {
   const db = useDB();
   const id = db.activeAccountId;
-  return { db, id, role: roleOf(id) as Role, name: accountName(db, id) };
+  return { db, id, role: effectiveRole(db, id) as Role, name: accountName(db, id), isWriter: isApproved(db, id, 'writer'), isFilmmaker: isApproved(db, id, 'filmmaker') };
 }
 
 export const homeFor = (role: Role | null) => (role === 'writer' ? '/writer/dashboard' : '/discover');
@@ -37,9 +37,28 @@ export function NotFoundState({ what = 'record', to }: { what?: string; to?: str
     </Page>
   );
 }
+/** Shown when a signed-in account has not been approved for a professional role (Figma 03.21 / 03.22 / 05.x gates). */
+export function ApprovalRequired({ kind }: { kind: 'writer' | 'filmmaker' }) {
+  const { db, id, role } = useMe();
+  const state = roleState(db, id, kind);
+  const label = kind === 'writer' ? 'Writer' : 'Filmmaker';
+  const text = state === 'pending' ? `Your ${label} application is waiting for owner review. You can keep reading in the meantime.`
+    : state === 'changes_requested' ? `The app owner asked for changes to your ${label} profile. Update it and resubmit.`
+    : state === 'rejected' ? `Your ${label} application wasn’t approved. You can update it and reapply.`
+    : `Approval is separate from signing in. Set up your ${label} profile and the app owner will review it.`;
+  return (
+    <Page title="Approval needed" centerTitle fallback={homeFor(role)}>
+      <EmptyState icon={ShieldAlert} title={`This area needs ${label} approval`} text={text} action={<LinkButton to={`/profile/${kind}`}>{state === 'pending' ? 'View application' : state === 'not_requested' ? `Set up ${label} profile` : 'Open application'}</LinkButton>} />
+    </Page>
+  );
+}
 export function RoleOnly({ roles, children }: { roles: Role[]; children: ReactNode }) {
-  const { role } = useMe();
-  return roles.includes(role) ? <>{children}</> : <PermissionDenied />;
+  const { role, isWriter, isFilmmaker } = useMe();
+  if (roles.includes('reader') && role === 'reader') return <>{children}</>;
+  if (roles.includes('writer') && isWriter) return <>{children}</>;
+  if (roles.includes('filmmaker') && isFilmmaker) return <>{children}</>;
+  if (roles.length === 1 && roles[0] !== 'reader') return <ApprovalRequired kind={roles[0] as 'writer' | 'filmmaker'} />;
+  return <PermissionDenied />;
 }
 export function Home() {
   const { db, id, role } = useMe();

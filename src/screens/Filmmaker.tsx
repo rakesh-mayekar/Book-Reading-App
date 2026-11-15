@@ -8,7 +8,7 @@ import { SAMPLE_FILMMAKER_INTRO } from '../domain/seed';
 import { enquiryGate, publicStory, publishedStories, readingMinutes, validateEnquiryDraft, validateIntro, type PubStory } from '../domain/rules';
 import { FORMATS } from '../domain/types';
 import { actions } from '../store/store';
-import { NotFoundState, PermissionDenied, RoleOnly, useMe } from './common';
+import { ApprovalRequired, NotFoundState, PermissionDenied, RoleOnly, useMe } from './common';
 
 export const storyMeta = (s: PubStory) => `${s.genre} · ${readingMinutes(s.chapters)} min · ${s.status === 'completed' ? 'Completed' : 'Ongoing'}`;
 
@@ -55,14 +55,15 @@ export function AdaptDiscover() {
 }
 
 export function Introduction() {
-  const { db, id, role } = useMe();
+  const { db, id, role, isFilmmaker } = useMe();
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const next = params.get('next');
   const p = db.filmmakers[id];
   const [f, setF] = useState({ name: p?.name ?? '', role: p?.role ?? '', team: p?.team ?? '', portfolio: p?.portfolio ?? '', intro: p?.intro ?? '' });
   const [tried, setTried] = useState(false);
-  if (role !== 'filmmaker') return <PermissionDenied />;
+  if (!isFilmmaker) return <ApprovalRequired kind="filmmaker" />;
+  void role;
   const errors = validateIntro(f);
   const set = (k: keyof typeof f) => (v: string) => setF((x) => ({ ...x, [k]: v }));
   return (
@@ -95,7 +96,7 @@ function useEnquiryContext() {
 
 function Gate({ ctx, children }: { ctx: ReturnType<typeof useEnquiryContext>; children: React.ReactNode }) {
   const { gate, story, storyId, db, id } = ctx;
-  if (ctx.role !== 'filmmaker') return <PermissionDenied />;
+  if (!ctx.isFilmmaker) return <ApprovalRequired kind="filmmaker" />;
   if (!story) return <NotFoundState what="story" to="/discover" />;
   if (!gate.ok) {
     if (gate.reason === 'duplicate') return <Navigate replace to={`/enquiries/${gate.existingId}`} />;
@@ -153,7 +154,7 @@ export function EnquiryReview() {
   const [error, setError] = useState('');
   const locked = useRef(false);
   const p = db.filmmakers[id];
-  if (ctx.role === 'filmmaker' && story && Object.keys(validateEnquiryDraft(draft)).length) return <Navigate replace to={`/story/${storyId}/enquire`} />;
+  if (ctx.isFilmmaker && story && Object.keys(validateEnquiryDraft(draft)).length) return <Navigate replace to={`/story/${storyId}/enquire`} />;
   const writer = story ? db.writers[story.writerId]?.name ?? '' : '';
   const submit = () => {
     if (locked.current) return;

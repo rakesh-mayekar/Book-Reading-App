@@ -46,6 +46,15 @@ export function describeAuthError(e: ErrLike, action: AuthAction, defaultCooldow
   if (action === 'verify' && (code === 'otp_expired' || low.includes('expired') || low.includes('invalid'))) {
     return { message: 'That code is incorrect, expired or already used. Check it, or request a new code.' };
   }
+  if (code === 'otp_disabled' || code === 'signup_disabled' || low.includes('signups not allowed') || code === 'user_not_found') {
+    return { message: 'We couldn’t find an account for that. Sign up instead.' };
+  }
+  if (code === 'sms_send_failed' || code === 'phone_provider_disabled' || low.includes('unsupported phone provider') || low.includes('phone provider')) {
+    return { message: 'Phone sign-in isn’t available right now. Try email instead.' };
+  }
+  if (code === 'provider_disabled' || low.includes('provider is not enabled')) {
+    return { message: 'That sign-in option isn’t available right now. Try email instead.' };
+  }
   if (code === 'invalid_credentials' || low.includes('invalid login')) return { message: 'Email or password is incorrect.' };
   if (code === 'same_password' || low.includes('different from the old')) return { message: 'Choose a password different from your current one.' };
   if (code === 'weak_password' || low.includes('password should')) return { message: 'Choose a stronger password (at least 8 characters).' };

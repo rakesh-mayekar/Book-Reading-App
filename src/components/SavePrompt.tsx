@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { isSupabaseConfigured } from '../auth/config';
-import { accountName, roleOf } from '../domain/rules';
+import { accountName, effectiveRole } from '../domain/rules';
 import { actions, setMode, useDB, useMode } from '../store/store';
 import { BottomSheet } from './Dialog';
 import { Button } from './ui';
@@ -22,7 +22,7 @@ export function useSaveStory() {
   const id = db.activeAccountId;
   return (story: { id: string; title: string }) => {
     const saved = db.saved.some((s) => s.accountId === id && s.storyId === story.id);
-    const guest = isSupabaseConfigured && mode === 'demo' && roleOf(id) === 'reader';
+    const guest = isSupabaseConfigured && mode === 'demo' && effectiveRole(db, id) === 'reader';
     if (!saved && guest && !dismissed()) set({ accountId: id, storyId: story.id, title: story.title });
     else actions.toggleSaved(id, story.id);
   };

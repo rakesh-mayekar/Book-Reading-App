@@ -1,5 +1,5 @@
 import { ACCOUNTS } from './seed';
-import type { AdaptationEnquiry, DB, EnquiryStatus, Role, Story } from './types';
+import type { AdaptationEnquiry, DB, EnquiryStatus, Role, RoleApp, RoleKind, RoleState, Story } from './types';
 import { COVER_IDS, FORMATS, GENRES, LANGUAGES, REPORT_REASONS } from './types';
 
 export type ErrorCode =
@@ -24,6 +24,33 @@ export function roleOf(accountId: string): Role | null {
   // Real Supabase accounts are readers until writer accounts and story ownership are connected.
   return ACCOUNTS.find((a) => a.id === accountId)?.role ?? (UUID.test(accountId) ? 'reader' : null);
 }
+
+/* ---------- Professional roles: sign-in is not approval ---------- */
+export function roleState(db: DB, accountId: string, kind: RoleKind): RoleState {
+  const stored = db.roleApps?.[accountId]?.[kind]?.state;
+  if (stored) return stored;
+  return ACCOUNTS.find((a) => a.id === accountId)?.role === kind ? 'approved' : 'not_requested';
+}
+export const roleApp = (db: DB, accountId: string, kind: RoleKind): RoleApp => ({ ...db.roleApps?.[accountId]?.[kind], state: roleState(db, accountId, kind) });
+export const isApproved = (db: DB, accountId: string, kind: RoleKind) => roleState(db, accountId, kind) === 'approved';
+/** Primary role for navigation. An account that is neither approved Writer nor Filmmaker is a Reader. */
+export function effectiveRole(db: DB, accountId: string): Role | null {
+  if (!roleOf(accountId)) return null;
+  if (isApproved(db, accountId, 'writer')) return 'writer';
+  if (isApproved(db, accountId, 'filmmaker')) return 'filmmaker';
+  return 'reader';
+}
+/** Applications may be (re)submitted unless one is already pending or approved: prevents duplicate pending applications. */
+export function canSubmitRole(db: DB, accountId: string, kind: RoleKind): boolean {
+  const s = roleState(db, accountId, kind);
+  return s === 'not_requested' || s === 'draft' || s === 'changes_requested' || s === 'rejected';
+}
+export type RoleDecision = 'approve' | 'request_changes' | 'reject';
+export function validateDecision(decision: RoleDecision, feedback: string): string {
+  if (decision !== 'approve' && feedback.trim().length < 10) return 'Add feedback of at least 10 characters so the applicant knows what to do next.';
+  return '';
+}
+export const ROLE_STATE_LABEL: Record<RoleState, string> = { not_requested: 'Not requested', draft: 'Draft', pending: 'Pending', approved: 'Approved', changes_requested: 'Changes needed', rejected: 'Not approved' };
 
 export function accountName(db: DB, accountId: string): string {
   if (db.realUser && db.realUser.id === accountId) return db.realUser.name || db.realUser.email.split('@')[0];
@@ -67,7 +94,7 @@ export type EnquiryGate =
 
 /** Single source of truth for "may this account start an enquiry about this story right now?" */
 export function enquiryGate(db: DB, accountId: string, storyId: string): EnquiryGate {
-  if (roleOf(accountId) !== 'filmmaker') return { ok: false, reason: 'not_filmmaker' };
+  if (!isApproved(db, accountId, 'filmmaker')) return { ok: false, reason: 'not_filmmaker' };
   const story = db.stories.find((s) => s.id === storyId);
   if (!story || !story.published) return { ok: false, reason: 'missing' };
   const existing = activeEnquiryFor(db, accountId, storyId);

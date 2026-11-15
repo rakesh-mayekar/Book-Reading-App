@@ -8,14 +8,16 @@ import { StoryDetails } from './screens/StoryDetails';
 import { Contents, Reader, ReadingDone } from './screens/Reader';
 import { Library } from './screens/Library';
 import { Author } from './screens/Author';
-import { Demo, Preferences, Privacy, Profile } from './screens/Profile';
+import { Blocked, Demo, EditProfile, Notifications, Preferences, Privacy, Profile, ReadingPrefs, Settings } from './screens/Profile';
 import { ChapterEditor, Chapters, Preview, Publish, StorySetup, WriterDashboard, WriterProfileEdit } from './screens/Writer';
 import { EnquiryForm, EnquiryReview, Introduction } from './screens/Filmmaker';
 import { Conversation, EnquiryDetail, EnquiryList } from './screens/Enquiries';
 import { Home, NotFoundState, RoleOnly, useMe } from './screens/common';
 import { SavePrompt } from './components/SavePrompt';
 import { BrandSplash, splashSeen } from './screens/BrandSplash';
-import { AuthScreen, ForgotPassword, OtpScreen, ResetPassword, Splash } from './screens/Auth';
+import { AuthCallback, AuthLanding, CodeScreen, CountryScreen, ForgotPassword, OtpScreen, PasswordScreen, ResetPassword, Splash } from './screens/Auth';
+import { Legal } from './screens/Legal';
+import { OwnerDone, OwnerFeedback, OwnerQueue, OwnerReview, RoleApplication, RoleSetup } from './screens/Roles';
 import { useAuth } from './auth/AuthProvider';
 import { isSupabaseConfigured } from './auth/config';
 import { onSyncError, useMode } from './store/store';
@@ -27,7 +29,7 @@ function Gate({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation();
   const auth = useAuth();
   const mode = useMode();
-  const authPath = pathname.startsWith('/auth');
+  const authPath = pathname.startsWith('/auth') || pathname.startsWith('/legal');
   if (isSupabaseConfigured && mode === 'account') {
     if (auth.status === 'loading' && !authPath) return <Splash />;
     if (auth.status === 'error')
@@ -72,7 +74,13 @@ export default function App() {
       <Gate>
         <Routes key={id}>
           <Route path="/" element={<Home />} />
-          <Route path="/auth" element={<AuthScreen />} />
+          <Route path="/auth" element={<AuthLanding mode="login" />} />
+          <Route path="/auth/signup" element={<AuthLanding mode="signup" />} />
+          <Route path="/auth/password" element={<PasswordScreen />} />
+          <Route path="/auth/code" element={<CodeScreen />} />
+          <Route path="/auth/country" element={<CountryScreen />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/legal/:doc" element={<Legal />} />
           <Route path="/auth/forgot" element={<ForgotPassword />} />
           <Route path="/auth/reset" element={<ResetPassword />} />
           <Route path="/auth/verify" element={<OtpScreen purpose="signup" />} />
@@ -91,9 +99,22 @@ export default function App() {
           <Route path="/profile" element={<Profile />} />
           <Route path="/profile/preferences" element={<Preferences />} />
           <Route path="/profile/privacy" element={<Privacy />} />
+          <Route path="/profile/blocked" element={<Blocked />} />
+          <Route path="/profile/reading" element={<ReadingPrefs />} />
           <Route path="/profile/demo" element={<Demo />} />
           <Route path="/profile/introduction" element={<Introduction />} />
-          <Route path="/profile/writer" element={<W><WriterProfileEdit /></W>} />
+          <Route path="/profile/writer" element={<RoleApplication kind="writer" />} />
+          <Route path="/profile/writer/edit" element={<W><WriterProfileEdit /></W>} />
+          <Route path="/profile/filmmaker" element={<RoleApplication kind="filmmaker" />} />
+          <Route path="/profile/filmmaker/edit" element={<Introduction />} />
+          <Route path="/profile/settings" element={<Settings />} />
+          <Route path="/profile/notifications" element={<Notifications />} />
+          <Route path="/profile/edit" element={<EditProfile />} />
+          <Route path="/setup/roles" element={<RoleSetup />} />
+          <Route path="/owner" element={<OwnerQueue />} />
+          <Route path="/owner/review/:accountId/:kind" element={<OwnerReview />} />
+          <Route path="/owner/review/:accountId/:kind/feedback" element={<OwnerFeedback />} />
+          <Route path="/owner/done/:accountId/:kind" element={<OwnerDone />} />
           <Route path="/writer/dashboard" element={<W><WriterDashboard /></W>} />
           <Route path="/writer/story/new" element={<W><StorySetup isNew /></W>} />
           <Route path="/writer/story/:id/setup" element={<W><StorySetup /></W>} />

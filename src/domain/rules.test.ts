@@ -166,3 +166,37 @@ describe('validation', () => {
     expect(R.validateIntro({ ...base, portfolio: 'https://example.com/work' })).toEqual({});
   });
 });
+
+import { canSubmitRole, effectiveRole, enquiryGate as gate2, roleState, validateDecision } from './rules';
+import { createSeed as seed2 } from './seed';
+describe('role approval (Account sign-in ≠ professional approval)', () => {
+  it('seeded demo roles are approved; readers have none', () => {
+    const db = seed2();
+    expect(roleState(db, 'acc-mira', 'writer')).toBe('approved');
+    expect(roleState(db, 'acc-kabir', 'filmmaker')).toBe('approved');
+    expect(roleState(db, 'acc-riya', 'writer')).toBe('not_requested');
+    expect(effectiveRole(db, 'acc-riya')).toBe('reader');
+    expect(effectiveRole(db, 'acc-mira')).toBe('writer');
+  });
+  it('a pending or approved application cannot be submitted again (no duplicate pending)', () => {
+    const db = { ...seed2(), roleApps: { 'acc-riya': { writer: { state: 'pending' as const } } } };
+    expect(canSubmitRole(db, 'acc-riya', 'writer')).toBe(false);
+    expect(canSubmitRole(db, 'acc-riya', 'filmmaker')).toBe(true);
+    expect(canSubmitRole(db, 'acc-mira', 'writer')).toBe(false);
+    expect(canSubmitRole({ ...db, roleApps: { 'acc-riya': { writer: { state: 'changes_requested' as const } } } }, 'acc-riya', 'writer')).toBe(true);
+  });
+  it('requesting changes or rejecting needs feedback; approving does not', () => {
+    expect(validateDecision('approve', '')).toBe('');
+    expect(validateDecision('reject', 'short')).not.toBe('');
+    expect(validateDecision('request_changes', 'Please add more detail.')).toBe('');
+  });
+  it('only an approved Filmmaker can open an enquiry; Writer approval alone is not enough', () => {
+    const db = seed2();
+    const open = db.stories.find((s) => s.adaptationOpen && s.published)!;
+    expect(gate2(db, 'acc-riya', open.id)).toMatchObject({ ok: false, reason: 'not_filmmaker' });
+    const pending = { ...db, roleApps: { 'acc-riya': { filmmaker: { state: 'pending' as const }, writer: { state: 'approved' as const } } } };
+    expect(gate2(pending, 'acc-riya', open.id)).toMatchObject({ ok: false, reason: 'not_filmmaker' });
+    const approved = { ...db, roleApps: { 'acc-riya': { filmmaker: { state: 'approved' as const } } } };
+    expect(gate2(approved, 'acc-riya', open.id).ok).toBe(true);
+  });
+});

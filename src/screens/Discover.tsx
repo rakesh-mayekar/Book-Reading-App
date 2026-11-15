@@ -25,8 +25,8 @@ function Section({ title, stories, onSeeAll }: { title: string; stories: PubStor
 }
 
 export function Discover() {
-  const { role } = useMe();
-  return role === 'filmmaker' ? <AdaptDiscover /> : <ReaderDiscover />;
+  const { role, isFilmmaker } = useMe();
+  return role === 'filmmaker' && isFilmmaker ? <AdaptDiscover /> : <ReaderDiscover />;
 }
 
 function ReaderDiscover() {
@@ -144,7 +144,7 @@ function ReaderDiscover() {
               <div className="d-genres">
                 {chipGenres.map((g) => (
                   <button key={g} className="d-genre" onClick={() => { set({ genres: [g] }); top(); }}>
-                    <span className="gicon" style={{ ['--icon' as string]: `url(${genreIcon[g]})` }} aria-hidden="true" />
+                    <span className="gicon" style={{ ['--icon' as string]: `url("${genreIcon[g]}")` }} aria-hidden="true" />
                     <span>{g}</span>
                   </button>
                 ))}

@@ -10,7 +10,7 @@ import { NotFoundState, useMe } from './common';
 
 export function StoryDetails() {
   const { id: storyId } = useParams();
-  const { db, id, role } = useMe();
+  const { db, id, isFilmmaker } = useMe();
   const back = useBack('/discover');
   const mode = useMode();
   const save = useSaveStory();
@@ -22,7 +22,7 @@ export function StoryDetails() {
   const saved = db.saved.some((s) => s.accountId === id && s.storyId === story.id);
   const prog = db.progress.find((p) => p.accountId === id && p.storyId === story.id);
   const inProgress = prog && !prog.completed;
-  const gate = role === 'filmmaker' ? enquiryGate(db, id, story.id) : null;
+  const gate = isFilmmaker ? enquiryGate(db, id, story.id) : null;
   const readTo = `/read/${story.id}/${inProgress ? Math.min(prog.chapterIndex, story.chapters.length - 1) + 1 : 1}`;
   const minutes = (i: number) => readingMinutes([story.chapters[i]]);
 
@@ -43,7 +43,7 @@ export function StoryDetails() {
       </div>
       <div className="sd-info">
         <div className="sd-tags">
-          <span><span className="gicon sm" style={{ ['--icon' as string]: `url(${genreIcon[story.genre] ?? icons.dSearch})` }} aria-hidden="true" />{story.genre}</span>
+          <span><span className="gicon sm" style={{ ['--icon' as string]: `url("${genreIcon[story.genre] ?? icons.dSearch}")` }} aria-hidden="true" />{story.genre}</span>
           <span><img src={icons.dBook} alt="" width={14} height={14} />{story.language}</span>
           <span><img src={icons.dCheck} alt="" width={14} height={14} />{story.status === 'completed' ? 'Completed' : 'Ongoing'}</span>
         </div>
@@ -69,7 +69,7 @@ export function StoryDetails() {
           <h2 id="adapt-h">From the page to the screen</h2>
           <p className="st">{story.adaptationOpen ? 'Open to adaptation' : 'Not open to adaptation right now'}</p>
           <p>{story.adaptationOpen ? `Have a project in mind? Connect with ${first} to discuss this story.` : 'You can still read it for free.'} <span className="muted">Declared by the writer; not proof of rights.</span></p>
-          {role === 'filmmaker' && gate ? (
+          {isFilmmaker && gate ? (
             gate.ok ? (
               <Link className="sd-cta" to={`/story/${story.id}/enquire`}>Discuss adaptation <img src={icons.dArrow} alt="" width={18} height={18} /></Link>
             ) : gate.reason === 'duplicate' ? (
@@ -80,7 +80,7 @@ export function StoryDetails() {
               <Notice icon={Info}>The writer is not taking adaptation enquiries for this story right now. You can still read it for free.</Notice>
             )
           ) : (
-            <p className="t-help">{mode === 'account' ? 'Adaptation enquiries are demo-only for now. They open once writer accounts and story ownership are connected.' : 'Only filmmaker accounts can send adaptation enquiries.'}</p>
+            <p className="t-help">{mode === 'account' ? 'Adaptation enquiries are demo-only for now. They open once writer accounts and story ownership are connected.' : 'Only approved Filmmaker accounts can send adaptation enquiries.'}</p>
           )}
         </section>
         {story.writerId === id && <LinkButton variant="secondary" to={`/writer/story/${story.id}/chapters`}>Manage this story</LinkButton>}
